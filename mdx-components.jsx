@@ -1,10 +1,10 @@
-import { useMDXComponents as getDocsMDXComponents } from 'nextra-theme-docs'
+import defaultMdxComponents from 'fumadocs-ui/mdx'
+import * as TabsComponents from 'fumadocs-ui/components/tabs'
 
-const docsComponents = getDocsMDXComponents()
-
-export function useMDXComponents(components) {
+export function getMDXComponents(components = {}) {
   return {
-    ...docsComponents,
+    ...defaultMdxComponents,
+    ...TabsComponents,
     ...components
   }
 }

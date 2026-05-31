@@ -1,0 +1,8 @@
+{
+  "title": "Foundations",
+  "pages": [
+    "what-is-a-vps",
+    "anatomy-of-a-server",
+    "first-ssh-connection"
+  ]
+}

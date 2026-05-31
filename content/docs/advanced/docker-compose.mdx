@@ -65,7 +65,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile.conf:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -78,7 +78,7 @@ volumes:
   caddy_config:
 ```
 
-```caddyfile filename="~/stacks/hello/Caddyfile"
+```nginx filename="~/stacks/hello/Caddyfile"
 hello.example.com {
     reverse_proxy app:3000
 }

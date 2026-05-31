@@ -1,0 +1,13 @@
+{
+  "title": "VPS Mastery",
+  "pages": [
+    "index",
+    "foundations",
+    "linux-basics",
+    "networking",
+    "remote-access",
+    "hosting",
+    "operations",
+    "advanced"
+  ]
+}

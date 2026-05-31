@@ -1,0 +1,10 @@
+{
+  "title": "Advanced",
+  "pages": [
+    "docker-compose",
+    "multi-app-reverse-proxy",
+    "cicd",
+    "hardening-checklist",
+    "cloud-vps"
+  ]
+}

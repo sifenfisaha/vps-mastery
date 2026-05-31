@@ -159,7 +159,7 @@ sudo firewall-cmd --reload
 
 ### The world's simplest Caddyfile
 
-```caddyfile filename="/etc/caddy/Caddyfile"
+```nginx
 mysite.example.com {
     root * /var/www/mysite
     file_server
@@ -192,7 +192,7 @@ You don't need certbot. You don't need a separate timer. **This is why people lo
 
 For local LAN-only sites where you don't want HTTPS:
 
-```caddyfile filename="/etc/caddy/Caddyfile"
+```nginx
 :80 {
     reverse_proxy 127.0.0.1:3000
 }

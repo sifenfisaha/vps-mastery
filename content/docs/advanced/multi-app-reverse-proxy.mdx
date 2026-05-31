@@ -38,7 +38,7 @@ We'll show Caddy and Traefik. Both are fantastic; pick based on temperament.
 
 Install Caddy ([Web Servers](/hosting/nginx-and-caddy)), then one Caddyfile:
 
-```caddyfile filename="/etc/caddy/Caddyfile"
+```nginx
 blog.example.com {
     reverse_proxy 127.0.0.1:3000
 }
@@ -179,7 +179,7 @@ Some real talk on choosing:
 
 Modern browsers love these. Caddy example:
 
-```caddyfile
+```nginx
 (secure-headers) {
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
@@ -203,7 +203,7 @@ For login endpoints especially. Caddy needs a plugin; Nginx and Traefik have it 
 
 You want structured logs you can pipe somewhere later. Caddy:
 
-```caddyfile
+```nginx
 blog.example.com {
     log {
         output file /var/log/caddy/blog.log

@@ -1,10 +1,8 @@
-import { Layout, Navbar } from 'nextra-theme-docs'
-import { Head } from 'nextra/components'
-import { getPageMap } from 'nextra/page-map'
-import { Search } from '../components/search.jsx'
-import { flattenPageMap } from '../lib/flatten-page-map.js'
-import 'nextra-theme-docs/style.css'
-import './globals.css'
+import { RootProvider } from 'fumadocs-ui/provider'
+import { DocsLayout } from 'fumadocs-ui/layouts/docs'
+import { source } from '../lib/source.js'
+import { baseOptions } from './layout.config.jsx'
+import './global.css'
 
 export const metadata = {
   metadataBase: new URL('https://vps-mastery.local'),
@@ -16,32 +14,15 @@ export const metadata = {
     'A complete, hands-on path from beginner to advanced Linux server administration, using your own home PC as a VPS.'
 }
 
-const navbar = (
-  <Navbar
-    logo={
-      <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>
-        <span style={{ opacity: 0.6 }}>~/</span>vps-mastery
-      </span>
-    }
-  />
-)
-
-export default async function RootLayout({ children }) {
-  const pageMap = await getPageMap()
-  const pages = flattenPageMap(pageMap)
+export default function RootLayout({ children }) {
   return (
-    <html lang="en" dir="ltr" suppressHydrationWarning>
-      <Head faviconGlyph="▲" />
-      <body>
-        <Layout
-          navbar={navbar}
-          pageMap={pageMap}
-          search={<Search pages={pages} />}
-          sidebar={{ defaultMenuCollapseLevel: 1 }}
-          docsRepositoryBase="https://github.com/your/repo/tree/main"
-        >
-          {children}
-        </Layout>
+    <html lang="en" suppressHydrationWarning>
+      <body className="flex flex-col min-h-screen">
+        <RootProvider>
+          <DocsLayout tree={source.pageTree} {...baseOptions}>
+            {children}
+          </DocsLayout>
+        </RootProvider>
       </body>
     </html>
   )

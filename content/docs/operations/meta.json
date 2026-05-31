@@ -1,0 +1,4 @@
+{
+  "title": "Operations",
+  "pages": ["logs", "monitoring", "backups", "cron-and-timers"]
+}

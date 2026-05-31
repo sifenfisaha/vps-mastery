@@ -9,5 +9,6 @@
     "moduleResolution": "bundler",
     "target": "es2022"
   },
-  "include": ["**/*.js", "**/*.jsx", "**/*.mdx"]
+  "include": ["**/*.js", "**/*.jsx", "**/*.mdx", ".source/**/*"],
+  "exclude": ["node_modules"]
 }

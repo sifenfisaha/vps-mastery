@@ -1,0 +1,10 @@
+{
+  "title": "Linux Basics",
+  "pages": [
+    "shell-and-files",
+    "permissions",
+    "users-and-sudo",
+    "package-management",
+    "processes-and-systemd"
+  ]
+}

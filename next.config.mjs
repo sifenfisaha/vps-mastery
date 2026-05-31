@@ -1,15 +1,11 @@
-import nextra from 'nextra'
+import { createMDX } from 'fumadocs-mdx/next'
 
-const withNextra = nextra({
-  search: {
-    codeblocks: true
-  },
-  defaultShowCopyCode: true
-})
+const withMDX = createMDX()
 
-export default withNextra({
+/** @type {import('next').NextConfig} */
+const config = {
   reactStrictMode: true,
-  eslint: {
-    ignoreDuringBuilds: true
-  }
-})
+  eslint: { ignoreDuringBuilds: true }
+}
+
+export default withMDX(config)
