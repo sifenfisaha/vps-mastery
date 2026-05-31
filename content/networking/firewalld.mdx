@@ -1,0 +1,169 @@
+---
+title: Firewall (firewalld)
+description: Decide what the network can reach. Fedora's default firewall, explained.
+---
+
+# Firewall — `firewalld`
+
+A firewall decides which incoming connections are allowed and which are blocked. Fedora ships with `firewalld` running by default. Other distros use `ufw` or raw `nftables` / `iptables` — same idea, different commands.
+
+## The mental model
+
+`firewalld` thinks in terms of **zones**. A zone is a trust level. You assign each network interface to a zone, and each zone has its own list of allowed services and ports.
+
+Default zones on Fedora:
+
+| Zone | Default policy |
+| --- | --- |
+| `public` | Block most incoming; allow SSH only. **This is the default for your main interface.** |
+| `trusted` | Allow everything. Don't use unless you really mean it. |
+| `internal` / `home` / `work` | Looser — allow some discovery services |
+| `dmz` | For exposed servers — only specific ports |
+| `block` / `drop` | Block aggressively |
+
+For a one-machine setup, you'll spend 99% of your time in the `public` zone.
+
+## Inspecting the current state
+
+```bash
+sudo systemctl status firewalld
+
+# What zone is the default?
+firewall-cmd --get-default-zone
+
+# What zone is each interface in?
+firewall-cmd --get-active-zones
+
+# What's allowed in the public zone?
+firewall-cmd --zone=public --list-all
+```
+
+The `list-all` output looks like:
+
+```text
+public (active)
+  target: default
+  icmp-block-inversion: no
+  interfaces: eno1
+  sources:
+  services: dhcpv6-client mdns ssh
+  ports:
+  protocols:
+  forward: yes
+  masquerade: no
+  ...
+```
+
+- `services` — symbolic names (firewalld knows `ssh` means port 22/tcp)
+- `ports` — manual port openings, if any
+- `interfaces` — which network cards are in this zone
+
+## The two-step pattern: `--permanent` then `--reload`
+
+Every firewalld change is **either** temporary (lost on reboot/reload) **or** permanent (survives). The reliable pattern:
+
+```bash
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --reload
+```
+
+- The first line writes the rule to disk for next reload.
+- The second line activates it now.
+
+If you forget `--permanent`, the change works until reboot, then quietly disappears. This is the single most common firewalld bug. Pretend `--permanent` is required.
+
+## Adding a service
+
+`firewalld` ships with **predefined service names** that know which port they use. Look at the list:
+
+```bash
+firewall-cmd --get-services
+# RH-Satellite-6 amanda-client amanda-k5-client amqp amqps apcupsd ... http https ...
+```
+
+To allow Nginx (which we'll install later) on ports 80 and 443:
+
+```bash
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+To remove:
+
+```bash
+sudo firewall-cmd --permanent --remove-service=http
+sudo firewall-cmd --reload
+```
+
+## Adding a custom port
+
+If you're running a service on a non-standard port (say, your Node app on `3000`):
+
+```bash
+sudo firewall-cmd --permanent --add-port=3000/tcp
+sudo firewall-cmd --reload
+```
+
+To remove:
+
+```bash
+sudo firewall-cmd --permanent --remove-port=3000/tcp
+sudo firewall-cmd --reload
+```
+
+> **Beginner mistake** — opening the port your app *talks to itself* through. If your Node app runs on `:3000` and you put Nginx in front of it on `:80`/`:443`, you should **not** open `:3000` to the world. Keep `3000` listening on `127.0.0.1` only, and only let the firewall allow `80` and `443`. Less surface area = fewer attacks.
+
+## Allowing only a specific source IP
+
+Sometimes you only want to allow access to a service from one specific address. Example: postgres should only accept connections from your app server:
+
+```bash
+sudo firewall-cmd --permanent --zone=public \
+  --add-rich-rule='rule family="ipv4" source address="203.0.113.5" port port=5432 protocol=tcp accept'
+
+sudo firewall-cmd --reload
+```
+
+Or restrict SSH to only your home's public IP (we'll do this in [SSH Hardening](/networking/ssh-hardening)).
+
+## Removing the default SSH rule
+
+You *can*. You shouldn't, unless you're 100% sure you have another way in. If you remove SSH access while connected over SSH, the firewall will drop the connection mid-command. You then walk to the physical machine to fix it.
+
+## Trying changes safely
+
+If you're testing a new rule and worried about locking yourself out:
+
+```bash
+sudo firewall-cmd --add-service=mything   # not permanent — gone on next reload
+# verify everything still works
+# if good:
+sudo firewall-cmd --permanent --add-service=mything
+sudo firewall-cmd --reload
+```
+
+The non-`--permanent` form is great for "try this before committing."
+
+## When firewalld confuses you
+
+Two situations where you'll be confused for the first time:
+
+1. **You added a rule but it's not active.** — You forgot `--reload`.
+2. **You added a `--permanent` rule, ran `--reload`, but no change.** — You added it to the wrong zone. Check `firewall-cmd --get-active-zones` and add `--zone=<the right one>` to your command.
+
+## What you should do now
+
+```bash
+firewall-cmd --get-default-zone
+firewall-cmd --zone=public --list-all
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+firewall-cmd --zone=public --list-services
+# should now show: ssh http https
+```
+
+You've just preemptively opened the ports we'll need for the web server lessons.
+
+[Continue to *Hardening SSH* →](/networking/ssh-hardening)

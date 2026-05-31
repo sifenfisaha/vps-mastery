@@ -1,0 +1,174 @@
+---
+title: Package Management (dnf)
+description: Install, update, and remove software on Fedora the right way.
+---
+
+# Package Management with `dnf`
+
+On Fedora, **dnf** is how you install software. It's the equivalent of `apt` on Debian/Ubuntu — same job, slightly different flags.
+
+A "package" is a bundle of files (binary, config, docs, dependencies) plus a recipe for installing them. dnf talks to **repositories** — servers that host thousands of packages — and downloads what you ask for, along with everything that package needs.
+
+## The five commands you'll use 99% of the time
+
+```bash
+sudo dnf update              # refresh the package list AND upgrade everything
+sudo dnf install <package>   # install a package
+sudo dnf remove <package>    # uninstall (also: dnf erase — same thing)
+dnf search <keyword>         # search for packages by name/description
+dnf info <package>           # show details about a package
+```
+
+Note that `search` and `info` don't need `sudo` — they only read.
+
+## Your first updates
+
+The first thing you should do on any new server is bring it up to date:
+
+```bash
+sudo dnf update -y
+```
+
+The `-y` means "yes to all prompts." Use it when you're sure; skip it when you want to read what's about to happen.
+
+## Installing essentials
+
+A short kit of utilities you'll want immediately:
+
+```bash
+sudo dnf install -y \
+  htop \
+  ncdu \
+  ripgrep \
+  fd-find \
+  bind-utils \
+  net-tools \
+  tmux \
+  curl \
+  wget \
+  git \
+  nano \
+  vim
+```
+
+What each one is for:
+
+| Tool | What it does |
+| --- | --- |
+| `htop` | Interactive process viewer, way nicer than `top` |
+| `ncdu` | Disk usage explorer ("which folder is eating my disk?") |
+| `ripgrep` (rg) | Wildly fast grep replacement |
+| `fd-find` | Wildly fast find replacement |
+| `bind-utils` | Provides `dig`, `host` — DNS debugging |
+| `net-tools` | Provides `netstat`, `ifconfig` — classic network tools |
+| `tmux` | Terminal multiplexer — survives disconnections, see below |
+| `curl` / `wget` | Download stuff from URLs |
+| `git` | You already know |
+| `nano` / `vim` | Editors |
+
+## tmux — the one tool that changes your life
+
+When your SSH connection dies (Wi-Fi flap, lid close), everything you were running dies with it. Unless you wrapped it in `tmux`.
+
+```bash
+tmux                  # start a tmux session
+# ... do stuff ...
+# disconnect: Ctrl-b then d
+tmux attach           # reconnect to your session, find everything still running
+tmux ls               # list running sessions
+tmux new -s deploy    # named session
+tmux attach -t deploy # attach to a named session
+```
+
+Run any long task inside tmux. Run your editor inside tmux. Make it muscle memory.
+
+## Searching for packages
+
+```bash
+dnf search nginx
+# nginx.x86_64 : A high performance web server and reverse proxy server
+# nginx-mod-mail.x86_64 : Nginx mail modules
+# ...
+
+dnf info nginx
+# Name         : nginx
+# Version      : 1.26.x
+# Release      : ...
+# Description  : ...
+```
+
+## Listing what's installed
+
+```bash
+dnf list installed                 # everything
+dnf list installed | grep nginx    # just nginx-related
+dnf history                        # what did I do recently?
+dnf history info <id>              # details of one history entry
+```
+
+`dnf history` is amazing — you can see every install/remove with timestamps and even undo a recent install:
+
+```bash
+sudo dnf history undo <id>
+```
+
+## Removing packages
+
+```bash
+sudo dnf remove <package>
+sudo dnf autoremove          # remove leftover deps no longer needed
+sudo dnf clean all           # clear the package cache (free disk space)
+```
+
+## Updating with care
+
+```bash
+sudo dnf check-update        # what's available without installing
+sudo dnf upgrade -y          # upgrade everything (same as `update`)
+sudo dnf upgrade nginx       # upgrade just one package
+```
+
+> **Production wisdom** — On a production server, don't blindly `dnf upgrade -y` then walk away. Updates can restart services. For critical services, schedule a window, read the changelog (`dnf updateinfo info`), and watch logs afterwards.
+
+## Repositories — where packages come from
+
+```bash
+dnf repolist                  # which repos are enabled
+sudo dnf config-manager --enable <repo>
+sudo dnf config-manager --disable <repo>
+```
+
+Two extra repos you'll likely want:
+
+- **RPM Fusion** — non-free codecs, drivers (`free` and `nonfree` tiers)
+- **COPR repos** — community-built packages, install via `sudo dnf copr enable owner/repo`
+
+You don't need either for this course; just know they exist.
+
+## Installing third-party software outside dnf
+
+Sometimes software isn't in any dnf repo. The four legitimate ways to install third-party stuff:
+
+1. **A vendor RPM** — download a `.rpm` file, install with `sudo dnf install ./file.rpm`.
+2. **A vendor script** — they give you `curl ... | sh`. Read the script before piping to sh.
+3. **A binary tarball** — extract into `/opt/<thing>/` and symlink the binary into `/usr/local/bin/`.
+4. **Build from source** — `./configure && make && sudo make install`. Rare these days.
+
+For most server-side tools — Node.js, Python, Docker, Postgres, Nginx — there's a clean dnf path. We'll use it.
+
+## A note on `flatpak` and `snap`
+
+These exist on Fedora but are aimed at **desktop apps**. On a headless server, ignore them. They sandbox graphical applications; they're not how server software is shipped.
+
+## What you should do now
+
+SSH into your Fedora box and run:
+
+```bash
+sudo dnf update -y
+sudo dnf install -y htop ncdu ripgrep tmux curl git
+```
+
+That puts you in a comfortable working environment for the rest of this course.
+
+[Continue to *Processes & systemd* →](/linux-basics/processes-and-systemd)

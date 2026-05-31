@@ -1,0 +1,113 @@
+---
+title: Port Forwarding (advanced)
+description: The traditional way to expose services — and exactly what you're signing up for when you do it.
+---
+
+# Port Forwarding
+
+Port forwarding tells your home router: "When someone from the internet connects to me on port X, send them to the Fedora box at 192.168.1.42 on port Y." It's the oldest way to host something from home, and the riskiest.
+
+This lesson is last in the section on purpose: only do this once you understand what you're exposing.
+
+## When port forwarding makes sense
+
+- You're running a service Cloudflare can't proxy (game server, dedicated VPN endpoint, raw TCP).
+- You explicitly want public IP exposure.
+- You've already done the [SSH hardening](/networking/ssh-hardening) lesson **and** have a firewall set up.
+
+For 99% of self-hosting hobbyists, [Tailscale](/remote-access/tailscale) or [Cloudflare Tunnel](/remote-access/cloudflare-tunnel) is a better answer.
+
+## What you're actually signing up for
+
+When you forward port 80 from your router to your server:
+
+- **Your home public IP is exposed.** Every connection to that port reveals your home's IP to whoever is connecting.
+- **Bots will find it within minutes.** Mass scanners sweep the entire IPv4 internet hourly. There's no hiding.
+- **Every misconfigured app on that port is now a vulnerability for your network.** Not just for the Fedora box — for the whole LAN.
+
+This isn't FUD. It's the reality of running anything on the public internet. Done well, it's totally fine. Done casually, it ruins your week.
+
+## The four pre-flight checks
+
+Before forwarding *anything*:
+
+1. **Static or pseudo-static IP for the Fedora box on your LAN.** Otherwise DHCP can hand it a new address and your forward breaks. Set a DHCP reservation in your router for the box's MAC address.
+2. **Firewall configured.** `firewalld` in `public` zone, only the specific service allowed. ([Firewall (firewalld)](/networking/firewalld))
+3. **SSH hardened.** Keys only, fail2ban running. ([Hardening SSH](/networking/ssh-hardening))
+4. **The service itself is up to date.** Latest version, all settings reviewed.
+
+If you can't tick all four, do not port forward.
+
+## The router-side setup
+
+Every router has different UI but the same fields. Look for "Port Forwarding" or "Virtual Servers."
+
+| Field | Value |
+| --- | --- |
+| External port | The port the *internet* will hit (e.g., `443`) |
+| Internal IP | Your Fedora box's LAN IP (e.g., `192.168.1.42`) |
+| Internal port | The port on the Fedora box (often the same, e.g., `443`) |
+| Protocol | TCP (or UDP for some services) |
+
+Save and reboot the router if it asks.
+
+## Get your public IP
+
+```bash
+curl ifconfig.me
+# 203.0.113.42
+```
+
+If you don't have a domain yet, you can reach your forwarded service at `http://203.0.113.42/` from outside your network (e.g., from your phone on cellular data, NOT on home Wi-Fi — most home routers don't loopback, so testing from inside the LAN won't work).
+
+## Dynamic DNS
+
+ISPs usually give residential connections a public IP that changes occasionally. A **Dynamic DNS** service gives you a hostname (like `myname.duckdns.org`) that auto-updates whenever your IP changes.
+
+Two common free options:
+
+- **Duck DNS** — `duckdns.org`. Tiny script you run via cron.
+- **Cloudflare** — if your domain is on Cloudflare, run a tiny script that updates an A record via their API.
+
+A Duck DNS update script:
+
+```bash filename="~/duckdns/update.sh"
+#!/usr/bin/env bash
+TOKEN=your-duckdns-token
+DOMAIN=mydomain
+echo url="https://www.duckdns.org/update?domains=${DOMAIN}&token=${TOKEN}&ip=" | \
+  curl -sS -K - > /tmp/duckdns.log
+```
+
+Run it every 5 minutes via a systemd timer (we cover those in [Cron & systemd Timers](/operations/cron-and-timers)).
+
+## A real example: serving HTTPS publicly
+
+If you've forwarded ports 80 and 443:
+
+1. Get a domain (e.g., from Cloudflare Registrar, Namecheap, Porkbun).
+2. Point an `A` record at your public IP.
+3. Install Caddy (we'll do this in [Domains & TLS](/hosting/tls-and-domains)). Caddy will automatically request a Let's Encrypt certificate.
+4. Visit `https://yourdomain.com`.
+
+The HTTPS cert + renewal is automatic with Caddy.
+
+## Honest risk talk
+
+Things people typically forget:
+
+- A service binding `0.0.0.0:5432` (Postgres) inside the LAN is fine; with port forwarding it's now open to the world. **Bind to `127.0.0.1` unless you really want it public.**
+- Cloud VPSes are isolated; your home box is one of many devices on your LAN. A compromised server can attack your other devices unless you network-segment.
+- Default credentials get found. Change every default password before forwarding.
+
+## The lazy correct setup for a home server
+
+You almost certainly want this combination instead of forwarding:
+
+- **Admin & SSH** → Tailscale (private, not on the public internet at all).
+- **One personal website or self-hosted app** → Cloudflare Tunnel (no ports forwarded, free HTTPS).
+- **Skip port forwarding entirely** unless you have a specific reason.
+
+When you eventually rent a real cloud VPS, port forwarding doesn't exist — the public IP is the box's IP directly. You'll still apply the same firewall rules. We cover that in [Graduating to a Real Cloud VPS](/advanced/cloud-vps).
+
+[Continue to *Hosting Apps* →](/hosting)

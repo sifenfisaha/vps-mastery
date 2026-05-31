@@ -1,0 +1,225 @@
+---
+title: Multi-App Reverse Proxy
+description: Host many apps on one server, each on its own subdomain, with automatic HTTPS.
+---
+
+# Multi-App Reverse Proxy
+
+A real server usually runs more than one thing. You might want:
+
+- `blog.example.com` — Ghost or a static site
+- `git.example.com` — Gitea
+- `cloud.example.com` — Nextcloud
+- `dash.example.com` — your own dashboard
+
+All on one box, all on the same ports (80/443). The reverse proxy decides which app each request goes to, based on the `Host` header.
+
+## The shape of the solution
+
+```text
+                 :443/:80
+internet ──▶ [reverse proxy] ──▶ blog          (:3000 internal)
+                              ──▶ gitea         (:3001 internal)
+                              ──▶ nextcloud     (:3002 internal)
+                              ──▶ dash          (:3003 internal)
+```
+
+Three honest choices for the reverse proxy:
+
+| | Caddy | Nginx | Traefik |
+| --- | --- | --- | --- |
+| Style | Config file (Caddyfile) | Config file (nginx.conf) | Config + auto-discovery |
+| HTTPS | Automatic | Manual (certbot) | Automatic |
+| Best for | "Few sites, edit a file" | "Big production deployments" | "Lots of containers, auto-route" |
+
+We'll show Caddy and Traefik. Both are fantastic; pick based on temperament.
+
+## Approach 1 — Caddy as the single proxy
+
+Install Caddy ([Web Servers](/hosting/nginx-and-caddy)), then one Caddyfile:
+
+```caddyfile filename="/etc/caddy/Caddyfile"
+blog.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+
+git.example.com {
+    reverse_proxy 127.0.0.1:3001
+}
+
+cloud.example.com {
+    reverse_proxy 127.0.0.1:3002
+    # Large file uploads
+    request_body {
+        max_size 1GB
+    }
+}
+
+dash.example.com {
+    reverse_proxy 127.0.0.1:3003
+
+    # Restrict to your Tailnet only (IP ranges):
+    @nottailscale not remote_ip 100.64.0.0/10
+    respond @nottailscale "Forbidden" 403
+}
+```
+
+Reload:
+
+```bash
+sudo systemctl reload caddy
+```
+
+Each subdomain needs an A record (or Cloudflare tunnel) pointing at the server. Caddy gets a cert per name automatically.
+
+That's it. Adding a 5th app is: append one block, reload.
+
+## Approach 2 — Nginx as the single proxy
+
+You need one `server` block per site, each requesting a certificate.
+
+```nginx filename="/etc/nginx/conf.d/blog.conf"
+server {
+    listen 80;
+    server_name blog.example.com;
+    location / { proxy_pass http://127.0.0.1:3000; include /etc/nginx/proxy.conf; }
+}
+```
+
+Where `/etc/nginx/proxy.conf` is a shared snippet you create once:
+
+```nginx filename="/etc/nginx/proxy.conf"
+proxy_http_version 1.1;
+proxy_set_header Host              $host;
+proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header Upgrade           $http_upgrade;
+proxy_set_header Connection        "upgrade";
+```
+
+Repeat the server block for each subdomain. Then:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d blog.example.com -d git.example.com -d cloud.example.com -d dash.example.com
+```
+
+certbot edits each block to listen on 443 and add the cert. Renewals automatic.
+
+## Approach 3 — Traefik (for container-heavy setups)
+
+Traefik shines when most things are Docker containers — you describe routing in container **labels** and Traefik auto-discovers them. No central config file to edit when you add an app.
+
+```yaml filename="compose.yaml"
+services:
+  traefik:
+    image: traefik:v3
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--certificatesresolvers.le.acme.email=you@example.com"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    restart: unless-stopped
+
+  blog:
+    image: ghost:5
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.blog.rule=Host(`blog.example.com`)"
+      - "traefik.http.routers.blog.entrypoints=websecure"
+      - "traefik.http.routers.blog.tls.certresolver=le"
+      - "traefik.http.services.blog.loadbalancer.server.port=2368"
+    restart: unless-stopped
+
+  gitea:
+    image: gitea/gitea:latest
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitea.rule=Host(`git.example.com`)"
+      - "traefik.http.routers.gitea.entrypoints=websecure"
+      - "traefik.http.routers.gitea.tls.certresolver=le"
+      - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+    volumes:
+      - gitea_data:/data
+    restart: unless-stopped
+
+volumes:
+  letsencrypt:
+  gitea_data:
+```
+
+Add a new app? Add a service block + labels. Traefik picks it up immediately, requests a cert, starts routing. No reloads, no config files.
+
+## Pick one, stick with it
+
+You only need one reverse proxy. Running Nginx **and** Caddy on the same host fighting for port 443 will not end well.
+
+Some real talk on choosing:
+
+- **You're mostly editing config files manually:** Caddy. Smallest config, automatic HTTPS, zero ceremony.
+- **You're in a Nginx ecosystem already:** stay there. The features are mature.
+- **You're running a fleet of containers:** Traefik. Labels-as-config is the right pattern.
+
+## Shared concerns no matter what proxy
+
+### Security headers
+
+Modern browsers love these. Caddy example:
+
+```caddyfile
+(secure-headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    }
+}
+
+blog.example.com {
+    import secure-headers
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+### Rate limiting
+
+For login endpoints especially. Caddy needs a plugin; Nginx and Traefik have it built in. Worth setting up once you have anything public-facing.
+
+### Access logs
+
+You want structured logs you can pipe somewhere later. Caddy:
+
+```caddyfile
+blog.example.com {
+    log {
+        output file /var/log/caddy/blog.log
+        format json
+    }
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Nginx — define a custom `log_format` in `nginx.conf`, then `access_log /var/log/nginx/blog.log custom_format;` per server block.
+
+## What you should have now
+
+- One reverse proxy fronting many apps.
+- Each app on a unique internal port, only reachable through the proxy.
+- HTTPS for every subdomain, auto-renewing.
+- Adding the next app is a 5-minute edit + restart.
+
+[Continue to *CI/CD to a Server* →](/advanced/cicd)

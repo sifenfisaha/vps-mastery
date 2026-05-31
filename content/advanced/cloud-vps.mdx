@@ -1,0 +1,164 @@
+---
+title: Graduating to a Real Cloud VPS
+description: When and why to move from the home lab to a $5/month box.
+---
+
+# Graduating to a Real Cloud VPS
+
+You've run a server at home. You've SSH'd, hardened, deployed, monitored, backed up. **Everything you learned applies, identically, to a real cloud VPS.** The only difference is that the box has a public IP from the start and lives in a data center.
+
+This lesson is your migration guide.
+
+## When to graduate
+
+You should consider a real cloud VPS when:
+
+- You want **24/7 uptime** without your home internet, power, or kids being a single point of failure.
+- You're hosting something other people depend on (a real project, a side business, a friend's blog).
+- Your home upload bandwidth is the bottleneck.
+- You want to test in a clean environment that you can throw away.
+
+Stay on the home box when:
+
+- It's a personal learning lab.
+- You're hosting things only for yourself, accessed via Tailscale.
+- You like that "off the grid" feeling. It's a valid choice.
+
+You don't have to choose — many people run **both**, with the cloud VPS for public stuff and the home box for personal stuff.
+
+## Picking a provider
+
+Honest 2026 rankings for personal/SMB use:
+
+| | Hetzner | DigitalOcean | Vultr | Linode (Akamai) | OVH |
+| --- | --- | --- | --- | --- | --- |
+| Price | Cheapest by far | Mid | Mid | Mid | Cheap |
+| EU regions | Excellent | Decent | OK | OK | Excellent |
+| US regions | OK (since 2023) | Excellent | Excellent | Excellent | Decent |
+| Bandwidth incl. | 20 TB | 1 TB | 1–2 TB | 1 TB | Unlimited |
+| Networking | Solid | Solid | Solid | Solid | Quirky |
+| Onboarding pain | Slightly more (KYC) | Easiest | Easy | Easy | Hardest |
+
+**Honest recommendation for a first VPS:** Hetzner Cloud (CX22 or similar, ~€4/month, 2 vCPU + 4 GB RAM). It's a screaming value. If you want frictionless onboarding and don't mind paying more, DigitalOcean's $6 droplet.
+
+Bigger clouds (AWS, GCP, Azure) are fine but charge more for the same thing and have a much steeper bill complexity. Use them when you need their specific services. For "run a Linux server," the indies above are cheaper and friendlier.
+
+## Provisioning checklist (first 30 minutes)
+
+You spin up a fresh Fedora 41 (or Debian 12) box. Walk through this, in order:
+
+1. **SSH in as root** with the password the provider emailed you.
+2. **Create your normal user:**
+   ```bash
+   useradd -m -s /bin/bash -G wheel alfie
+   passwd alfie
+   mkdir -p /home/alfie/.ssh
+   # Paste your laptop's public key (~/.ssh/id_ed25519.pub) into:
+   nano /home/alfie/.ssh/authorized_keys
+   chmod 700 /home/alfie/.ssh
+   chmod 600 /home/alfie/.ssh/authorized_keys
+   chown -R alfie:alfie /home/alfie/.ssh
+   ```
+3. **From your laptop, log in as that user:**
+   ```bash
+   ssh alfie@<vps-ip>
+   ```
+   Confirm it works. **Keep this session open.**
+4. **Update everything:**
+   ```bash
+   sudo dnf upgrade -y
+   ```
+5. **Harden SSH** (from [SSH Hardening](/networking/ssh-hardening)). In a *new* terminal, test that you can still SSH in.
+6. **Firewall:**
+   ```bash
+   sudo systemctl enable --now firewalld
+   sudo firewall-cmd --zone=public --list-all
+   ```
+   Make sure SSH (your chosen port) is in the allowed list. Add HTTP/HTTPS if you'll host websites.
+7. **Set the hostname:**
+   ```bash
+   sudo hostnamectl set-hostname myvps.example.com
+   ```
+8. **Set the timezone:**
+   ```bash
+   sudo timedatectl set-timezone UTC      # UTC for servers, always
+   ```
+9. **Tailscale** (optional but nice — install it; now you can SSH via the Tailnet too):
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+10. **Automatic security updates:**
+    ```bash
+    sudo dnf install -y dnf-automatic
+    sudo sed -i 's/^apply_updates =.*/apply_updates = yes/' /etc/dnf/automatic.conf
+    sudo sed -i 's/^upgrade_type =.*/upgrade_type = security/' /etc/dnf/automatic.conf
+    sudo systemctl enable --now dnf-automatic.timer
+    ```
+11. **Install fail2ban** (from [SSH Hardening](/networking/ssh-hardening)).
+
+That's the baseline. You now have a hardened, monitored-ish, ready-to-host box.
+
+Bonus: pin all of this in a [cloud-init](https://cloud-init.io/) or **Ansible playbook** so the next box is one command instead of 30. We won't cover Ansible here, but it's the natural next step once you're doing this twice.
+
+## Migrating your apps from home → cloud
+
+The clean path:
+
+1. **Inventory what's on the home box.** `dnf list installed | tee installed.txt`, `ls /etc/systemd/system/`, `dpkg -l` if Debian, plus any Docker stacks.
+2. **Re-deploy each app on the cloud VPS** using the same patterns from [Deploying a Node.js App](/hosting/deploying-a-node-app) or [Docker Compose](/advanced/docker-compose).
+3. **Migrate the database** — `pg_dump` on home, `pg_restore` on cloud.
+4. **Update DNS** to point at the new VPS IP. Lower your TTL a day in advance so cutover is fast.
+5. **Test everything via the new IP** before flipping DNS (use `/etc/hosts` overrides on your laptop).
+6. **After DNS propagation, decommission the home apps** but keep the box around for new experiments.
+
+> **Don't try to clone the disk.** Cloud VPSes are usually pristine images; you don't get to dump `dd` from home to there. Treat it as a fresh deploy. This is also a forcing function: anything you can't reproduce from your repo + backups + a 30-min checklist is fragile and worth fixing.
+
+## Cost-aware operation
+
+A few cheats to keep cloud costs sane:
+
+- **Pick the right size.** A 2-core / 4 GB VM ($5–€8/mo) hosts a *lot* of small services. Don't overbuy.
+- **Snapshot before risky changes.** Most providers snapshot for ~$0.50/mo per snapshot. Cheap insurance.
+- **Watch egress bandwidth.** Hetzner gives you 20TB. DigitalOcean gives you 1TB. If you're serving large files, put them behind Cloudflare so cache hits don't count against egress.
+- **Use object storage for big stuff.** Backups, video, uploads — put them in S3-compatible storage ($5/TB at Backblaze B2) instead of the VPS disk.
+- **Don't run a Kubernetes cluster on one node** for a personal project. It's expensive and gives you nothing. Use docker compose.
+
+## Multiple servers — when to split
+
+Until you have a real reason, **one box runs everything.** Even for 10 small services. Splitting too early adds operational cost (more boxes to patch, monitor, back up).
+
+Reasons to actually split:
+
+- **High availability.** One box can die; the load balancer fails over to the other.
+- **Resource isolation.** Something heavy (a big DB, a build server, an ML model) shouldn't share a host with your latency-sensitive web app.
+- **Geographic latency.** Users in multiple regions deserve a server near them.
+- **Compliance.** Some regulations require dedicated boxes for specific workloads.
+
+When the day comes, the playbook is:
+
+1. Reverse proxy and apps on one box; DB on another.
+2. Then DB → managed service (DigitalOcean Managed Postgres, Hetzner managed DB, Neon, etc.) so you stop being the DB admin.
+3. Then apps behind a load balancer (provider-managed) with two app boxes.
+4. Then Kubernetes, if you really need it.
+
+Most projects never reach step 3, and that's fine.
+
+## What you've actually learned
+
+Look back at the table of contents. Every section maps to a real-world skill that companies pay for:
+
+- Foundations + Linux Basics → "junior sysadmin"
+- Networking + Remote Access → "DevOps engineer, level 1"
+- Hosting + Operations → "production-ready application engineer"
+- Advanced → "senior infrastructure engineer"
+
+You're not "learning servers" anymore. You're doing the job.
+
+The next steps are:
+
+- Pick a project. Build it. Deploy it. Operate it.
+- Read other people's `compose.yaml` files on GitHub.
+- When a service breaks at 11pm, **don't reinstall** — diagnose. That's how the real skill stacks.
+
+You've made it. Go run something.

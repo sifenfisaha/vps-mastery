@@ -1,0 +1,217 @@
+---
+title: Cron & systemd Timers
+description: Run jobs on a schedule. Pick the right tool, write it once, sleep well.
+---
+
+# Cron & systemd Timers
+
+Two ways to run scheduled jobs on Linux:
+
+| | cron | systemd timers |
+| --- | --- | --- |
+| Age | 1975 | 2010s |
+| Config | One file per user (`crontab`) | Two unit files per job |
+| Logs | You arrange them yourself | Automatic, in journalctl |
+| Catch-up after downtime | No | Yes (`Persistent=true`) |
+| Status (`systemctl status mytimer`) | None | Built-in |
+| Dependencies | None | `Requires=`, `After=` |
+
+For new jobs, **prefer systemd timers**. cron isn't going away — you'll see it on lots of servers — so know both.
+
+## cron — the classic
+
+Edit your user's crontab:
+
+```bash
+crontab -e
+```
+
+Five time fields plus a command:
+
+```text
+# m  h  dom mon dow  command
+  0  3  *   *   *    /home/alfie/scripts/backup.sh
+  */15 * *   *   *    curl -fsS https://example.com/cron-ping/hello > /dev/null
+  30 2  *   *   0    /home/alfie/scripts/weekly.sh
+```
+
+| Position | Means | Range |
+| --- | --- | --- |
+| 1 | minute | 0–59 |
+| 2 | hour | 0–23 |
+| 3 | day of month | 1–31 |
+| 4 | month | 1–12 |
+| 5 | day of week | 0–6 (0 = Sunday) |
+
+Common patterns:
+
+| Spec | When |
+| --- | --- |
+| `*/5 * * * *` | Every 5 minutes |
+| `0 * * * *` | Top of every hour |
+| `0 3 * * *` | 3:00 AM daily |
+| `0 3 * * 0` | 3:00 AM every Sunday |
+| `30 2 1 * *` | 2:30 AM on the 1st of each month |
+
+For root tasks, use `sudo crontab -e` (root's crontab) or drop a file in `/etc/cron.d/`:
+
+```text filename="/etc/cron.d/restic-backup"
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 3 * * * root /usr/local/bin/backup.sh
+```
+
+The `/etc/cron.d/` form has a 6th field — the **user** to run as.
+
+> **Where do cron's logs go?** Cron emails the output to the local user by default. On a fresh server there's no mail setup, so the emails go nowhere. Always redirect stdout/stderr to a file you can read: `... >> /var/log/myjob.log 2>&1`.
+
+## Systemd timers — the modern way
+
+You need two files per job: a `.service` (what to run) and a `.timer` (when to run it).
+
+### The service unit (one-shot)
+
+```ini filename="/etc/systemd/system/health-ping.service"
+[Unit]
+Description=Hit the health endpoint and log the result
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -c 'curl -fsS https://mysite.example.com/health || echo "FAIL at $(date)"'
+```
+
+`Type=oneshot` tells systemd "this isn't a daemon, just run it and exit." Different from a regular service unit.
+
+### The timer unit
+
+```ini filename="/etc/systemd/system/health-ping.timer"
+[Unit]
+Description=Health check every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=health-ping.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Activate:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now health-ping.timer
+```
+
+See it scheduled:
+
+```bash
+systemctl list-timers
+```
+
+You'll see when it last ran and when it'll run next.
+
+### `OnCalendar=` syntax
+
+systemd's syntax is more human than cron's.
+
+```ini
+OnCalendar=daily                  # every day at 00:00
+OnCalendar=hourly                 # every hour at :00
+OnCalendar=*-*-* 03:30:00         # every day at 3:30 AM
+OnCalendar=Mon..Fri 09:00         # weekdays at 9
+OnCalendar=*:0/15                 # every 15 min
+OnCalendar=*-*-01 04:00           # the 1st of every month at 4am
+OnCalendar=2026-12-31 23:59:59    # one-shot for a specific moment
+```
+
+Test what a spec means:
+
+```bash
+systemd-analyze calendar 'Mon..Fri 09:00'
+# Original form: Mon..Fri 09:00
+# Normalized form: Mon..Fri *-*-* 09:00:00
+# Next elapse: Mon 2026-06-01 09:00:00 UTC
+```
+
+### `Persistent=true` — the killer feature
+
+If the box was off when the timer should have fired, `Persistent=true` makes it run as soon as possible after boot. cron can't do this. For daily backups, this matters.
+
+### Reading logs of a timer's runs
+
+```bash
+journalctl -u health-ping.service          # the service's log output
+journalctl -u health-ping.timer            # the timer's own events
+```
+
+### Stopping a timer
+
+```bash
+sudo systemctl disable --now health-ping.timer
+```
+
+## When to use which
+
+**Use cron when:**
+
+- You're on an older system that has no systemd (rare in 2026).
+- You're matching the style of an existing codebase.
+- You want a one-line definition for a trivial job.
+
+**Use systemd timers when:**
+
+- The job has dependencies on other services (`After=postgresql.service`).
+- You want `Persistent=true` so missed runs catch up.
+- You want logging without setting up your own.
+- You want resource limits per-job (`MemoryMax=`, `CPUQuota=`).
+- You want status / list / manual triggering (`systemctl start mytimer.service`).
+
+## Patterns that bite people
+
+- **`*/5 * * * *` doesn't mean "5 minutes after a fixed reference."** It means "any minute divisible by 5." Same with `OnCalendar=*:0/5`. So a 1-minute job won't drift.
+- **Cron uses `/bin/sh`, not bash.** Bash-isms in your one-liner will fail silently. Either set `SHELL=/bin/bash` at the top of the crontab, or stick to plain sh, or call out to a script file.
+- **`PATH` is minimal in cron.** Always use absolute paths (`/usr/bin/curl`) or set `PATH=` at the top of the crontab.
+- **Long-running cron jobs overlapping.** If a 5-min job sometimes takes 8 minutes, two copies can run at once. Wrap with `flock`: `flock -n /tmp/myjob.lock /path/to/script.sh`.
+- **Output going to /dev/null.** It feels clean but you lose debugging. Send it to a file or, better, write a service unit so journalctl captures everything.
+
+## Quick win: convert one cron job to a timer
+
+If you already have something running in cron, converting it is 5 minutes well spent. You'll get logs and status for free.
+
+```text filename="(old crontab line)"
+0 3 * * * /usr/local/bin/backup.sh
+```
+
+becomes:
+
+```ini filename="/etc/systemd/system/nightly-backup.service"
+[Unit]
+Description=Nightly backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup.sh
+```
+
+```ini filename="/etc/systemd/system/nightly-backup.timer"
+[Unit]
+Description=Nightly backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now nightly-backup.timer
+```
+
+Remove the cron line. Done.
+
+[Continue to *Advanced* →](/advanced)

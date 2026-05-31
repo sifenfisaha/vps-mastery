@@ -1,0 +1,186 @@
+---
+title: Processes & systemd
+description: See what's running, kill what isn't behaving, and let systemd run your services 24/7.
+---
+
+# Processes & systemd
+
+A **process** is a running program. Your shell is a process. SSHd is a process. Nginx, when we install it, will be a process.
+
+Every process has:
+
+- A unique **PID** (process ID), e.g. `1234`
+- A parent process (the one that launched it)
+- A user it's running as
+- Resources it's using (CPU, memory, open files)
+
+## Seeing what's running
+
+```bash
+ps aux                # everything, detailed
+ps -ef                # everything, different format
+ps aux | grep ssh     # just sshd-ish things
+pgrep -a ssh          # PIDs of anything matching "ssh"
+```
+
+For something interactive:
+
+```bash
+htop                  # the modern, colorful view
+top                   # the classic
+```
+
+In htop: arrow keys to navigate, `F9` to kill, `F10` to quit. `Shift+M` sort by memory, `Shift+P` by CPU.
+
+## Stopping a misbehaving process
+
+Find the PID, then:
+
+```bash
+kill 1234            # ask politely (SIGTERM)
+kill -9 1234         # demand it die (SIGKILL) — last resort
+killall nginx        # by name
+pkill -f "node app"  # by command-line pattern
+```
+
+> **Why prefer `kill` over `kill -9`** — `SIGTERM` lets the process clean up (close files, finish a database transaction, write a final log line). `SIGKILL` murders it instantly with no chance to clean up — which can corrupt data. Always start with `kill <pid>`. Use `-9` only if it ignored you for 10 seconds.
+
+## Background and foreground
+
+```bash
+long-running-command &       # run in background
+jobs                          # list backgrounded jobs in this shell
+fg                           # bring last job back to foreground
+fg %1                        # bring job #1 to foreground
+Ctrl-Z                       # pause the foreground job
+bg                           # resume the paused job in background
+```
+
+For real "run this 24/7" purposes you should **not** use `&` — use systemd or tmux. `&` dies when your shell dies.
+
+## Now: systemd
+
+**systemd** is the boss of services on Fedora. You'll talk to it with `systemctl`.
+
+The five commands you need:
+
+```bash
+systemctl status <service>          # is it running? recent logs?
+sudo systemctl start <service>      # start now
+sudo systemctl stop <service>       # stop now
+sudo systemctl restart <service>    # stop, then start
+sudo systemctl reload <service>     # re-read config without stopping (if supported)
+
+sudo systemctl enable <service>     # start at boot
+sudo systemctl disable <service>    # don't start at boot
+
+sudo systemctl enable --now <svc>   # enable AND start (most common pattern)
+sudo systemctl disable --now <svc>  # disable AND stop
+```
+
+Try them on a service that's already there:
+
+```bash
+systemctl status sshd
+systemctl status firewalld
+systemctl status NetworkManager
+```
+
+You don't need `sudo` for `status`, only for state changes.
+
+## Reading the status output
+
+```text
+● sshd.service - OpenSSH server daemon
+     Loaded: loaded (/usr/lib/systemd/system/sshd.service; enabled; preset: enabled)
+     Active: active (running) since Wed 2026-05-31 09:14:22 UTC; 4h 22min ago
+   Main PID: 873 (sshd)
+      Tasks: 1 (limit: 4628)
+     Memory: 4.2M
+        CPU: 320ms
+     CGroup: /system.slice/sshd.service
+             └─873 "sshd: /usr/sbin/sshd -D ..."
+
+Apr 09 09:14:22 fedora systemd[1]: Started OpenSSH server daemon.
+```
+
+Decode it:
+
+- `Loaded` line tells you if it's set to start at boot (`enabled`/`disabled`).
+- `Active` line tells you if it's running right now (`active`/`inactive`/`failed`).
+- `Main PID` is the process ID of the service.
+- The last few lines are recent log output (very useful when debugging).
+
+## Listing services
+
+```bash
+systemctl list-units --type=service                  # currently loaded
+systemctl list-units --type=service --state=running  # only running ones
+systemctl list-unit-files --type=service             # all known + enable state
+```
+
+## A failed service — debugging flow
+
+If you see `Active: failed`, the recipe is:
+
+```bash
+systemctl status myservice          # the last few log lines
+journalctl -u myservice -n 100      # the last 100 log lines
+journalctl -u myservice -f          # live tail
+journalctl -u myservice --since "10 min ago"
+```
+
+Fix the config, then:
+
+```bash
+sudo systemctl restart myservice
+systemctl status myservice
+```
+
+If you changed a `.service` file itself (we'll do this later), you have to reload systemd first:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart myservice
+```
+
+## Writing your own systemd service (preview)
+
+You'll write your first one in [Deploying a Node.js App](/hosting/deploying-a-node-app). For now, just know that a service is a small text file in `/etc/systemd/system/`. Here's what one looks like:
+
+```ini filename="/etc/systemd/system/myapp.service"
+[Unit]
+Description=My app
+After=network.target
+
+[Service]
+Type=simple
+User=alfie
+WorkingDirectory=/home/alfie/myapp
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Three sections:
+
+- `[Unit]` — what it is, when to start it (e.g., "after network is up")
+- `[Service]` — what to actually run, as which user, with what behavior on crash
+- `[Install]` — what `systemctl enable` should hook this into
+
+Drop that file in place, run `sudo systemctl daemon-reload`, then `sudo systemctl enable --now myapp`. You now have a self-restarting daemon. That's how the pros run apps.
+
+## What you should do now
+
+```bash
+systemctl status sshd
+systemctl list-units --type=service --state=running
+journalctl -u sshd -n 20
+```
+
+You're going to live in these commands. Get comfortable.
+
+[Continue to *Networking* →](/networking)

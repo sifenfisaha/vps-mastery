@@ -1,0 +1,71 @@
+---
+title: What is a VPS?
+description: Strip the marketing away. A VPS is a Linux computer you reach over the network.
+---
+
+# What is a VPS?
+
+**VPS** stands for *Virtual Private Server*. In practice, it's three things:
+
+1. A computer running Linux,
+2. that you reach over the network (no monitor, no keyboard),
+3. that you have full administrator (`root`) access to.
+
+That's it. The "virtual" part means it usually shares physical hardware with other servers — but you don't care, because it behaves exactly like a real one. The "private" part means it's yours: nobody else logs in.
+
+## Why people rent VPSes
+
+Most internet services run on them. When you sign up for a $5/month VPS at Hetzner or DigitalOcean, you get:
+
+- A Linux box (Ubuntu, Debian, Fedora — your choice)
+- A **public IP address** the whole internet can reach
+- 24/7 uptime in a data center
+- An SSH login as `root`
+
+From that login, you can install anything, host websites, run databases, write scripts. It's a real computer.
+
+## Why we're using your home PC instead
+
+Your second PC running Fedora has all the same primitives:
+
+- It runs Linux (same OS family as 90% of cloud VPSes).
+- You can give yourself a root login.
+- You can reach it over your LAN with SSH right now, and from the outside internet by the end of [section 4](/remote-access).
+- Best of all: **when you break it, you didn't waste any money.**
+
+The skills are identical. The commands are identical. Every lesson here works the same way on a $5 DigitalOcean droplet — you just swap the IP address.
+
+## The mental flip you need to make
+
+A desktop computer asks: *"What do I want to do right now?"* You click an icon, you type in a browser.
+
+A server asks: *"What service should be running 24/7, and how do I make sure it stays up?"* You configure it once, you walk away, and you check on it later.
+
+Everything that's confusing about server administration becomes obvious if you remember this. There's no "open the app" on a server — there's "is the service running, and on what port, and who can reach it?"
+
+## What you don't need
+
+A common beginner trap: thinking you need to learn networking theory, OSI layers, and TCP/IP internals before you can use a server.
+
+You don't. You need to know **three things** about networking to start, and you'll learn them in [section 3](/networking):
+
+- IP addresses (the server's phone number)
+- Ports (which "extension" on that phone)
+- DNS (the phonebook that turns names into numbers)
+
+The rest is hands-on. Keep moving.
+
+## Vocabulary you'll see everywhere
+
+| Term | What it means in this course |
+| --- | --- |
+| **VPS** | Your Fedora PC, or a rented cloud Linux box. Same thing for us. |
+| **The host** | The computer you're SSHing **into**. |
+| **The client** | The computer you're SSHing **from** (your laptop). |
+| **Root** | The all-powerful administrator user. Use carefully. |
+| **Service / daemon** | A program that runs in the background. SSH itself is one. |
+| **Port** | A numbered "door" on the server. SSH is on port 22 by default. |
+
+That's all the theory you need. Next: what's actually inside a Linux server.
+
+[Continue to *Anatomy of a Linux Server* →](/foundations/anatomy-of-a-server)

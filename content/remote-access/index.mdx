@@ -1,0 +1,14 @@
+---
+title: Remote Access
+description: Reach your home server from anywhere on the internet — safely.
+---
+
+# Remote Access
+
+Your Fedora box is great on the LAN. Now you want to SSH in from a coffee shop, or expose a service to a friend. There are three ways to do it; you should know all three.
+
+1. [**Tailscale**](/remote-access/tailscale) — The easy, modern, recommended path. Encrypted private network across all your devices, zero port forwarding.
+2. [**Cloudflare Tunnel**](/remote-access/cloudflare-tunnel) — Expose a single web service to the public internet without opening any ports on your router.
+3. [**Port Forwarding**](/remote-access/port-forwarding) — The traditional way: open ports on your home router. Powerful, but riskier — covered last so you understand what the easier tools are saving you from.
+
+> **Pick one based on the goal.** Tailscale = "I want to use my server like it's local, but from anywhere." Cloudflare Tunnel = "I want to share **one website** publicly without revealing my home IP." Port forwarding = "I'm running a public service and I understand the risks."

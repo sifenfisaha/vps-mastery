@@ -1,0 +1,160 @@
+---
+title: Cloudflare Tunnel
+description: Publish one web service to the public internet, without opening any router ports.
+---
+
+# Cloudflare Tunnel
+
+Cloudflare Tunnel ("cloudflared") lets your server make an **outbound** connection to Cloudflare. Cloudflare then receives public traffic at your domain and forwards it down that connection to your box. No inbound router ports. No public IP needed. Free for personal use.
+
+## When to use it
+
+- You want to host a personal website / dashboard / Nextcloud / Gitea on your home server.
+- You don't want to open port 80/443 on your router (good — you shouldn't, usually).
+- You want HTTPS for free, with Cloudflare's automatic certificates.
+
+## Prerequisite
+
+You need a domain (any one — `.com`, `.dev`, whatever) and it must use Cloudflare's nameservers. If you don't have a domain yet, grab one from Cloudflare Registrar or Namecheap, then add the domain to Cloudflare (free tier) and change the nameservers at your registrar.
+
+## Install cloudflared on your Fedora box
+
+```bash
+sudo dnf install -y https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-x86_64.rpm
+cloudflared --version
+```
+
+## Authenticate
+
+```bash
+cloudflared tunnel login
+```
+
+This prints a URL — open it on any browser, log in to Cloudflare, pick the domain you want to manage. A certificate is saved to `~/.cloudflared/cert.pem`. This is one-time per machine.
+
+## Create a tunnel
+
+```bash
+cloudflared tunnel create my-home-server
+```
+
+You'll get a tunnel UUID. Note the path to the credential file it saved (something like `~/.cloudflared/<uuid>.json`).
+
+## Map a hostname to a local service
+
+Suppose you want `home.example.com` to point at the Node app you'll deploy later on port 3000.
+
+Create a config file:
+
+```yaml filename="~/.cloudflared/config.yml"
+tunnel: my-home-server
+credentials-file: /home/alfie/.cloudflared/<uuid>.json
+
+ingress:
+  - hostname: home.example.com
+    service: http://localhost:3000
+  - service: http_status:404
+```
+
+Notes:
+
+- `ingress` is matched top-to-bottom; the last entry should be a catch-all.
+- You can add multiple `hostname: ... service: ...` pairs for multiple sites.
+
+Tell DNS to point at this tunnel:
+
+```bash
+cloudflared tunnel route dns my-home-server home.example.com
+```
+
+Cloudflare creates a CNAME automatically.
+
+## Run it
+
+To test manually first:
+
+```bash
+cloudflared tunnel run my-home-server
+```
+
+Visit `https://home.example.com`. You should see whatever's running on `localhost:3000` (a "connection refused" page is fine if you haven't started an app yet — that proves the tunnel is up).
+
+## Make it a service (so it runs at boot)
+
+```bash
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
+systemctl status cloudflared
+```
+
+The service uses the config file at `/etc/cloudflared/config.yml` (the installer copies your user config over). Subsequent edits should go in `/etc/cloudflared/`.
+
+## What's actually happening
+
+```text
+visitor ──HTTPS──▶ Cloudflare edge ──persistent outbound conn──▶ cloudflared on your box ──HTTP──▶ localhost:3000
+```
+
+- Visitors hit Cloudflare's IP, not yours. Your home IP is hidden.
+- Cloudflare terminates TLS — they handle the certificate.
+- Your box's connection to Cloudflare is **outbound**, so no router ports need to be opened.
+- The hop from cloudflared to your local app is plain HTTP on localhost — that's fine, it never leaves the machine.
+
+## Multiple apps, multiple subdomains
+
+```yaml filename="~/.cloudflared/config.yml"
+tunnel: my-home-server
+credentials-file: /home/alfie/.cloudflared/<uuid>.json
+
+ingress:
+  - hostname: blog.example.com
+    service: http://localhost:3000
+  - hostname: nextcloud.example.com
+    service: http://localhost:8080
+  - hostname: gitea.example.com
+    service: http://localhost:3001
+  - service: http_status:404
+```
+
+Route each in DNS:
+
+```bash
+cloudflared tunnel route dns my-home-server blog.example.com
+cloudflared tunnel route dns my-home-server nextcloud.example.com
+cloudflared tunnel route dns my-home-server gitea.example.com
+```
+
+Reload:
+
+```bash
+sudo systemctl restart cloudflared
+```
+
+## SSH over a tunnel (bonus)
+
+You can also tunnel TCP services (SSH, databases) — but use **Cloudflare Access** so authentication is at the edge. Walk-through is on Cloudflare's docs; the short version:
+
+```yaml
+ingress:
+  - hostname: ssh.example.com
+    service: ssh://localhost:22
+  - service: http_status:404
+```
+
+Add an Access policy requiring email auth, then on the client:
+
+```bash
+cloudflared access ssh --hostname ssh.example.com
+```
+
+Personally: for SSH, just use Tailscale. It's simpler.
+
+## When to *not* use Cloudflare Tunnel
+
+- You're running anything Cloudflare's terms of service prohibit (heavy non-HTTP streaming, gaming servers).
+- You don't want a third party in the path of your traffic. (Cloudflare can see/route your HTTPS in cleartext form at the edge.)
+- You need raw TCP/UDP for non-web protocols (Cloudflare supports some, but it gets fiddly).
+
+For those cases: real [Port Forwarding](/remote-access/port-forwarding) is the answer.
+
+[Continue to *Port Forwarding* →](/remote-access/port-forwarding)

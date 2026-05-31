@@ -1,0 +1,217 @@
+---
+title: Hardening Checklist
+description: A printable checklist of one-time fixes that close 95% of the attack surface.
+---
+
+# Hardening Checklist
+
+A reference list. Most of these you'll have done in earlier lessons; this is the consolidated "did I do all of them?" view. Print it out, work through each item once per new server.
+
+> ✅ = required before exposing the server to the public internet.
+> 🛡️ = strong best practice.
+> 💡 = nice to have.
+
+---
+
+## Account & authentication
+
+✅ **No root SSH login.** `/etc/ssh/sshd_config` → `PermitRootLogin no`.
+✅ **No password SSH login.** `PasswordAuthentication no`, `KbdInteractiveAuthentication no`.
+✅ **Key-only auth.** Each admin has their own ed25519 key. Use `~/.ssh/authorized_keys`.
+✅ **Strong passphrase on each private key** OR a hardware key (YubiKey).
+🛡️ **Restrict who can SSH in.** `AllowUsers you` or `AllowGroups admins` in `sshd_config`.
+🛡️ **Limit sudo to a single group.** Put admins in `wheel`; don't sprinkle `sudoers` entries.
+🛡️ **`sudo` requires password.** Yes, even if it's annoying. Saves you when a key leaks.
+💡 **Hardware key for `sudo`** via pam_u2f. Nice once you have one.
+
+```bash
+# Audit:
+grep -E "^(PermitRootLogin|PasswordAuthentication|AllowUsers|AllowGroups|PubkeyAuthentication)" /etc/ssh/sshd_config
+```
+
+---
+
+## SSH transport
+
+✅ **Move SSH off port 22** to something like 2222. Massive log-noise reduction.
+✅ **`fail2ban` installed and watching sshd.**
+🛡️ **Restrict SSH to specific source IPs** if you have a static IP, or to your Tailnet (`firewall-cmd ... rich-rule`).
+🛡️ **Idle session timeout.** `ClientAliveInterval 300`, `ClientAliveCountMax 2`.
+💡 **Use Tailscale and remove SSH from the public interface entirely.** ([Tailscale](/remote-access/tailscale))
+
+```bash
+# Audit:
+sudo ss -tlnp | grep ssh
+sudo fail2ban-client status sshd
+```
+
+---
+
+## Firewall
+
+✅ **firewalld enabled.** `systemctl is-enabled firewalld` returns `enabled`.
+✅ **Default-deny on `public` zone** with only the services you explicitly need.
+🛡️ **No services accidentally listening on `0.0.0.0` that should be local.** Check with `ss -tlnp`.
+🛡️ **No ports forwarded on the router that aren't documented.** Walk through your router UI and remove anything you don't remember adding.
+
+```bash
+# Audit:
+firewall-cmd --zone=public --list-all
+sudo ss -tlnp
+```
+
+---
+
+## System hygiene
+
+✅ **Automatic security updates.** `dnf-automatic`:
+
+```bash
+sudo dnf install -y dnf-automatic
+sudo nano /etc/dnf/automatic.conf
+#   apply_updates = yes
+#   upgrade_type  = security
+sudo systemctl enable --now dnf-automatic.timer
+```
+
+🛡️ **Reboot policy after kernel updates.** Either `needs-restarting -r` weekly + manual, or `dnf-automatic` with `reboot = when-needed` (requires `dnf-automatic-systemd`).
+🛡️ **Time sync working.** `timedatectl` should show `System clock synchronized: yes`. Many auth/TLS bugs trace back to clock drift.
+
+---
+
+## Service hardening
+
+✅ **Each app runs as its own non-login user.** Not as root, not as your admin user.
+✅ **Each service binds to `127.0.0.1`** unless it has a reason to be public.
+🛡️ **systemd hardening flags** on every unit file you write:
+
+```ini
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+```
+
+🛡️ **Resource limits on each service** so a runaway can't OOM-kill the box:
+
+```ini
+MemoryMax=512M
+CPUQuota=80%
+```
+
+💡 **Read-only root filesystem** for stateless services. `ProtectSystem=strict` + explicit `ReadWritePaths=`.
+
+```bash
+# Audit:
+systemd-analyze security <service-name>
+```
+
+`systemd-analyze security` scores every unit by default. Aim for "OK" or better on your custom services.
+
+---
+
+## Web layer
+
+✅ **HTTPS everywhere** with auto-renewal. ([Domains & TLS](/hosting/tls-and-domains))
+✅ **HTTP → HTTPS redirect** at the proxy.
+🛡️ **Security headers** at the proxy:
+
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Content-Security-Policy: ...` (a real one, tailored to your app)
+
+🛡️ **Rate limit login endpoints** at the proxy. Burst limit of 5/min per IP is sane.
+🛡️ **Logs sanitized** before shipping anywhere — never log full auth headers, full payloads, or unrotated tokens.
+💡 **WAF** (Cloudflare's free tier is a fine starting point). Filters common automated attacks at the edge.
+
+Test your TLS at [ssllabs.com/ssltest/](https://www.ssllabs.com/ssltest/). Aim for A or A+.
+
+---
+
+## Database
+
+✅ **Database listens on localhost only.** ([Postgres](/hosting/postgres))
+✅ **App user has only the privileges it needs.** Not `SUPERUSER`. Not even `CREATE DATABASE`.
+✅ **Strong, random passwords** for every DB role.
+🛡️ **TLS for DB connections** if they cross machines. (Localhost-only: not needed.)
+🛡️ **Regular tested backups.** ([Backups](/operations/backups))
+
+---
+
+## Containers (if you use Docker)
+
+🛡️ **Don't run containers as root inside.** Use `USER` in your Dockerfiles.
+🛡️ **Bind published ports to `127.0.0.1`** when possible. `-p 127.0.0.1:5432:5432`.
+🛡️ **`--cap-drop=ALL`** then re-add only what's needed. Docker Compose `cap_drop:` / `cap_add:`.
+🛡️ **Read-only root for stateless containers.** `--read-only`, mount `/tmp` as tmpfs.
+🛡️ **Pin image tags.** No `:latest` in production compose files.
+💡 **Image scanning** with `trivy` or `grype` in CI.
+
+---
+
+## Logging & alerting
+
+🛡️ **Centralize logs** for any system with more than one host. (Loki + Grafana, or a hosted log service.)
+🛡️ **Alert on failed `sshd` auth spikes.** Either via Loki rules or fail2ban Slack/Telegram integration.
+🛡️ **Watch `/var/log/secure` periodically.** It catches things firewalld doesn't.
+
+---
+
+## Backups
+
+✅ **Off-site backups.** Same building isn't "off-site."
+✅ **Encrypted at rest.** `restic` does this automatically; just keep the password safe.
+✅ **Tested restore** at least once. ([Backups](/operations/backups))
+🛡️ **Document the restore procedure.** Future-you will be panicking and grateful.
+
+---
+
+## Annual rituals
+
+Once a year, run through:
+
+- [ ] Rotate SSH keys for admins. Old keys removed from all `authorized_keys`.
+- [ ] Rotate database passwords.
+- [ ] Rotate API keys and webhook secrets.
+- [ ] Review `firewalld` rules — anything you don't recognize?
+- [ ] Review `dnf history | head -50` — any installs you don't remember?
+- [ ] Test a backup restore on a fresh box.
+- [ ] Check TLS at ssllabs.com.
+
+---
+
+## Quick audit script
+
+A bash one-liner to sanity check the most important items:
+
+```bash
+#!/usr/bin/env bash
+echo "=== SSH ==="
+sshd -T 2>/dev/null | grep -E "^(permitrootlogin|passwordauthentication|port|allowusers) "
+echo
+echo "=== Firewall ==="
+firewall-cmd --get-default-zone
+firewall-cmd --zone=public --list-all
+echo
+echo "=== Listening services ==="
+sudo ss -tlnp | grep -v "127.0.0.1"
+echo
+echo "=== Failed services ==="
+systemctl --failed
+echo
+echo "=== Auto-updates ==="
+systemctl is-enabled dnf-automatic.timer
+echo
+echo "=== fail2ban ==="
+sudo fail2ban-client status 2>/dev/null
+```
+
+Run it monthly. Anything surprising in the output is something to investigate.
+
+[Continue to *Graduating to a Real Cloud VPS* →](/advanced/cloud-vps)

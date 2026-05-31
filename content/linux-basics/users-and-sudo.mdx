@@ -1,0 +1,168 @@
+---
+title: Users, Root & sudo
+description: Why you never log in as root, how sudo works, and how to manage user accounts.
+---
+
+# Users, Root & sudo
+
+Linux is **multi-user** down to the bone. Even on a single-person server, you'll have many users — some are humans (`alfie`), some are services (`postgres`, `nginx`, `www-data`). Understanding users is understanding security.
+
+## The root user
+
+`root` is user ID **0**. It is the administrator. Root can:
+
+- Read and write **any** file
+- Kill **any** process
+- Install software, modify firewall, restart services
+- Permanently destroy the system with one wrong command
+
+The last bullet is why we don't log in as root directly. Mistakes are silent and total.
+
+```bash
+whoami
+id
+# uid=1000(alfie) gid=1000(alfie) groups=1000(alfie),10(wheel),...
+```
+
+That `wheel` group is the magic word — on Fedora, members of `wheel` are allowed to use `sudo`.
+
+## `sudo` — "do this one thing as root"
+
+```bash
+sudo dnf install -y htop      # install a package as root
+sudo systemctl restart sshd   # restart a service as root
+sudo nano /etc/hosts          # edit a protected file as root
+```
+
+What `sudo` does:
+
+1. Checks if you're allowed (in `wheel` group on Fedora, or listed in `/etc/sudoers`).
+2. Asks for **your** password (not root's).
+3. Runs the single command as root.
+4. Caches your auth for 5–15 minutes so you don't retype constantly.
+
+This gives you a paper trail (every `sudo` is logged) and forces you to think about each privileged action.
+
+> **Common confusion** — `sudo` asks for *your* password, not root's. Most servers don't even have a root password set anymore. If `sudo` keeps rejecting your password, double-check you're typing the password of the user you're logged in as.
+
+## What if `sudo` doesn't work?
+
+Three quick checks:
+
+```bash
+groups                 # am I in `wheel`?
+sudo -l                # what am I allowed to run?
+cat /etc/sudoers       # only readable as root
+```
+
+To add yourself to `wheel`, you have to do it as root (or from a user who already has sudo):
+
+```bash
+sudo usermod -aG wheel alfie
+# log out and back in for the new group to take effect
+```
+
+## Becoming root for longer
+
+For multiple commands in a row:
+
+```bash
+sudo -i           # start a real root shell (prompt changes to #)
+# do stuff as root
+exit              # back to your user
+```
+
+Use sparingly. The prompt changes from `$` to `#` to remind you.
+
+## Service users
+
+When you install software, it often creates its own user. Examples after we install things later:
+
+```bash
+cat /etc/passwd | grep -E "nginx|postgres|caddy"
+# nginx:x:982:982:Nginx web server:/var/lib/nginx:/sbin/nologin
+# postgres:x:26:26:PostgreSQL Server:/var/lib/pgsql:/bin/bash
+```
+
+These users typically:
+
+- Have **no password** (you can't log in as them directly)
+- Have `/sbin/nologin` as their shell (logging in is rejected outright)
+- Exist solely to **own files** and **run processes** with limited permissions
+
+This is good security — if Nginx is compromised, the attacker is stuck as the `nginx` user, not root.
+
+## Reading `/etc/passwd` and `/etc/group`
+
+Two files contain the entire user/group database:
+
+```bash
+cat /etc/passwd
+# alfie:x:1000:1000:Alfie:/home/alfie:/bin/bash
+# │     │ │    │    │     │           │
+# │     │ │    │    │     │           └── login shell
+# │     │ │    │    │     └── home directory
+# │     │ │    │    └── friendly name (GECOS field)
+# │     │ │    └── primary group ID
+# │     │ └── user ID (uid)
+# │     └── password (always 'x' nowadays — real hash is in /etc/shadow)
+# └── username
+
+cat /etc/group
+# wheel:x:10:alfie
+# │     │ │  │
+# │     │ │  └── members
+# │     │ └── group ID
+# │     └── password (unused)
+# └── group name
+```
+
+You won't usually edit these by hand. Use the management commands below.
+
+## Managing users
+
+```bash
+# Create a new user
+sudo useradd -m -s /bin/bash newuser
+sudo passwd newuser                   # set their password
+
+# Add to a group
+sudo usermod -aG docker newuser       # the -a is critical, means APPEND
+                                      # without it you OVERWRITE all their groups
+
+# List groups
+groups newuser
+
+# Delete a user (and their home dir)
+sudo userdel -r newuser
+```
+
+> **The `-a` trap** — `usermod -G docker newuser` (no `-a`) replaces *all* of newuser's groups with just `docker`. They lose `wheel`, sudo access, everything. Always use `-aG`.
+
+## Changing your own password
+
+```bash
+passwd                    # change your own password (interactive)
+sudo passwd alfie         # change someone else's
+```
+
+## Switching users on the fly
+
+```bash
+su - alfie       # switch to alfie (asks for alfie's password)
+sudo -u alfie ls /home/alfie    # run one command as alfie (no password)
+exit             # back to your original session
+```
+
+`su -` with the dash means "give me a full login session as that user" (loads their environment). Without the dash you keep your current environment, which is rarely what you want.
+
+## A sane default workflow
+
+For the rest of this course:
+
+1. SSH in as your normal user.
+2. Prefix admin commands with `sudo`.
+3. Never `sudo -i` unless you have multiple commands and remember to `exit` when done.
+4. If you find yourself running `sudo` for everything in a directory, ask: should I be using `chown` to give my user ownership instead?
+
+[Continue to *Package Management* →](/linux-basics/package-management)

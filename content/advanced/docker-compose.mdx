@@ -1,0 +1,237 @@
+---
+title: Docker Compose
+description: Define a whole stack of containers in one YAML file.
+---
+
+# Docker Compose
+
+`docker run` is fine for one container. Real apps usually need a stack — app + database + cache + reverse proxy. Typing out `docker run --network ... -v ...` for each one every time you redeploy is miserable.
+
+**Docker Compose** lets you describe the whole stack in a single `compose.yaml` file. Then `docker compose up -d` brings the entire thing up, networked together, with one command.
+
+It's installed already if you followed the [Docker Basics](/hosting/docker) lesson (the `docker-compose-plugin` package). Verify:
+
+```bash
+docker compose version
+```
+
+> Note: the modern command is `docker compose` (two words). The older `docker-compose` (one word, separate binary) is deprecated. Tutorials may use the old form — they're equivalent for our purposes.
+
+## A real example: app + Postgres + Caddy
+
+Project layout:
+
+```text
+~/stacks/hello/
+├── compose.yaml
+├── app/
+│   ├── Dockerfile
+│   ├── package.json
+│   └── server.js
+└── Caddyfile
+```
+
+```yaml filename="~/stacks/hello/compose.yaml"
+services:
+  app:
+    build: ./app
+    environment:
+      DATABASE_URL: postgres://hello:secret@db:5432/hello
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    # No ports exposed to host — only Caddy talks to it
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: hello
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: hello
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "hello"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+```
+
+```caddyfile filename="~/stacks/hello/Caddyfile"
+hello.example.com {
+    reverse_proxy app:3000
+}
+```
+
+```dockerfile filename="~/stacks/hello/app/Dockerfile"
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+Bring it up:
+
+```bash
+cd ~/stacks/hello
+docker compose up -d
+docker compose ps
+docker compose logs -f
+```
+
+Tear it down (keeps volumes):
+
+```bash
+docker compose down
+```
+
+Tear it all down (removes volumes — destroys data):
+
+```bash
+docker compose down -v
+```
+
+## Things to notice about that compose file
+
+- **Service names are DNS names.** Inside the stack, `app` can reach `db:5432` by name. Compose puts everything on a private network.
+- **No ports on `app` or `db`.** Only `caddy` publishes 80/443 to the host. Postgres is unreachable from outside the stack — exactly what we want.
+- **`depends_on: condition: service_healthy`** waits for the DB to actually accept connections before starting the app. Without that, the app race-starts and crashes.
+- **`restart: unless-stopped`** auto-restarts containers if they crash *or* if Docker restarts. You don't need a separate process supervisor.
+- **Named volumes** (`pgdata`, `caddy_data`) persist across `docker compose down/up`. Bind mounts (`./Caddyfile`) edit-in-place.
+
+## Common commands
+
+```bash
+docker compose up -d              # start (detached)
+docker compose down               # stop & remove containers (keeps volumes)
+docker compose ps                 # which containers in this stack are running
+docker compose logs -f            # follow all logs
+docker compose logs -f app        # just one service
+docker compose exec app sh        # shell into the app container
+docker compose restart app        # restart one service
+docker compose pull               # fetch newer image versions
+docker compose up -d --build      # rebuild before starting
+```
+
+## Updating an app
+
+```bash
+cd ~/stacks/hello
+# edit code in ./app/
+docker compose up -d --build app
+docker compose logs -f app
+```
+
+That rebuilds the image and rolling-restarts the one service.
+
+## Updating dependencies (the official image kind)
+
+When `postgres:16` gets a new minor release:
+
+```bash
+docker compose pull db
+docker compose up -d db
+```
+
+Compose only restarts what changed.
+
+## Environment files
+
+Don't put secrets in `compose.yaml`. Use a `.env` file next to it:
+
+```bash filename=".env"
+POSTGRES_PASSWORD=long-random-string
+APP_SECRET=another-long-random-string
+```
+
+Compose reads it automatically. Then reference variables:
+
+```yaml
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  app:
+    environment:
+      APP_SECRET: ${APP_SECRET}
+```
+
+Add `.env` to `.gitignore`. Always.
+
+## Running Compose stacks at boot
+
+Two clean options:
+
+**Option A — `restart: unless-stopped`** on every service in the file. When the host reboots, Docker starts containers that were running.
+
+**Option B — A systemd service for the whole stack.** Cleaner for production:
+
+```ini filename="/etc/systemd/system/hello-stack.service"
+[Unit]
+Description=Hello stack (compose)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/alfie/stacks/hello
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable hello-stack
+```
+
+Now `systemctl start/stop hello-stack` does the right thing, and it boots automatically.
+
+## Profiles, overrides, and prod vs dev
+
+For dev/prod split, define a base `compose.yaml` plus overrides:
+
+```bash
+docker compose -f compose.yaml -f compose.prod.yaml up -d
+```
+
+This is how teams keep dev (uses bind-mount of source code, exposes ports, includes Mailcatcher) different from prod (uses built image, no debug ports). Read the Compose docs for the override merge rules once you need this.
+
+## When Compose isn't enough
+
+Compose is great for one host. Once you have multiple hosts, you graduate to:
+
+- **Docker Swarm** — same compose-ish syntax, runs across a cluster. Easy on-ramp.
+- **Kubernetes** — the industry standard for "we have many hosts." Big learning curve. Worth it for serious production. Not worth it for a home lab.
+
+For everything in this course, single-host Compose is enough.
+
+[Continue to *Multi-App Reverse Proxy* →](/advanced/multi-app-reverse-proxy)

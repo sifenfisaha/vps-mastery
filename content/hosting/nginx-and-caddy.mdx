@@ -1,0 +1,209 @@
+---
+title: Web Servers — Nginx & Caddy
+description: The traffic cops of the web. When to pick which.
+---
+
+# Web Servers: Nginx & Caddy
+
+A **web server** does two jobs:
+
+1. Serve static files (HTML, images, CSS, JS) over HTTP/HTTPS.
+2. **Reverse proxy** — forward requests to other apps running locally (your Node app, your Python app, etc.), then forward their responses back.
+
+The two most common picks in 2026:
+
+| | Nginx | Caddy |
+| --- | --- | --- |
+| Origin | 2004, the industry workhorse | 2015, modern, opinionated |
+| Config language | Custom DSL, terse | Custom DSL, friendlier |
+| HTTPS / Let's Encrypt | Manual (certbot) | **Automatic out of the box** |
+| Performance | Excellent, slightly higher ceiling | Excellent in practice |
+| Where you'll see it | Big production fleets, legacy stacks | Modern personal servers, hobby projects |
+
+Honest recommendation for this course: **Caddy** for the simple cases (it does HTTPS for you), **Nginx** when you're working on a project that already uses it. We'll show both.
+
+---
+
+## Nginx
+
+### Install
+
+```bash
+sudo dnf install -y nginx
+sudo systemctl enable --now nginx
+```
+
+Open the firewall:
+
+```bash
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+Test in a browser at `http://<your-fedora-ip>/`. You should see the Fedora Nginx welcome page.
+
+### File layout on Fedora
+
+```text
+/etc/nginx/
+  nginx.conf                  # main config
+  conf.d/                     # *.conf files included automatically
+  default.d/                  # snippets included inside the default server block
+/var/log/nginx/
+  access.log
+  error.log
+/usr/share/nginx/html/        # default document root
+```
+
+You'll mostly edit files in `/etc/nginx/conf.d/`. One file per site is the clean pattern.
+
+### A static site
+
+```nginx filename="/etc/nginx/conf.d/mysite.conf"
+server {
+    listen 80;
+    listen [::]:80;
+    server_name mysite.example.com;
+
+    root /var/www/mysite;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    access_log /var/log/nginx/mysite.access.log;
+    error_log  /var/log/nginx/mysite.error.log;
+}
+```
+
+Make sure the docroot exists and Nginx can read it:
+
+```bash
+sudo mkdir -p /var/www/mysite
+echo "<h1>hello from nginx</h1>" | sudo tee /var/www/mysite/index.html
+sudo chown -R nginx:nginx /var/www/mysite
+```
+
+Test and reload:
+
+```bash
+sudo nginx -t                   # syntax check — always run before reload
+sudo systemctl reload nginx     # apply without dropping connections
+```
+
+> **`nginx -t` is non-negotiable.** A bad config makes Nginx refuse to start. Always test first; the test command tells you the exact line of the mistake.
+
+### A reverse proxy to a local app
+
+Most production sites are Nginx in front of an app (Node, Python, Go) running on a local port.
+
+```nginx filename="/etc/nginx/conf.d/myapp.conf"
+server {
+    listen 80;
+    server_name myapp.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+    }
+}
+```
+
+Reload, and Nginx now forwards every request for `myapp.example.com` to whatever's running on `127.0.0.1:3000`.
+
+We'll do a full example in [Deploying a Node.js App](/hosting/deploying-a-node-app).
+
+### Enabling HTTPS with Nginx + Let's Encrypt
+
+```bash
+sudo dnf install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d myapp.example.com
+```
+
+certbot edits your Nginx config to add the cert + listen on 443, and schedules auto-renewal via a systemd timer. You can verify:
+
+```bash
+systemctl status certbot-renew.timer
+```
+
+---
+
+## Caddy
+
+### Install
+
+Caddy isn't in Fedora's default repos; the COPR is the cleanest path:
+
+```bash
+sudo dnf install -y 'dnf-command(copr)'
+sudo dnf copr enable -y @caddy/caddy
+sudo dnf install -y caddy
+sudo systemctl enable --now caddy
+```
+
+Open the firewall (same as nginx):
+
+```bash
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+### The world's simplest Caddyfile
+
+```caddyfile filename="/etc/caddy/Caddyfile"
+mysite.example.com {
+    root * /var/www/mysite
+    file_server
+}
+
+myapp.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+That's it. The whole config.
+
+Reload:
+
+```bash
+sudo systemctl reload caddy
+```
+
+Caddy will automatically:
+
+- Request a Let's Encrypt certificate for both hostnames the first time they're hit.
+- Redirect HTTP to HTTPS.
+- Renew certs in the background forever.
+
+You don't need certbot. You don't need a separate timer. **This is why people love Caddy.**
+
+> **Caddy requires that the domain actually resolves to your server.** Let's Encrypt validates by hitting the domain; if DNS isn't pointing here, cert issuance fails. Either point DNS first, or use a [Cloudflare Tunnel](/remote-access/cloudflare-tunnel) (in which case Cloudflare handles certs and you don't even need Caddy's auto-HTTPS).
+
+### When you want HTTP-only (development)
+
+For local LAN-only sites where you don't want HTTPS:
+
+```caddyfile filename="/etc/caddy/Caddyfile"
+:80 {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Caddy now serves whatever's on `:3000` over plain HTTP on port 80.
+
+---
+
+## Which to use in this course
+
+We'll demonstrate **both** in [Deploying a Node.js App](/hosting/deploying-a-node-app). Pick the one you find clearer. Skills transfer — the underlying concepts (server blocks, reverse proxy, certificates) are identical.
+
+[Continue to *Domains & TLS Certificates* →](/hosting/tls-and-domains)

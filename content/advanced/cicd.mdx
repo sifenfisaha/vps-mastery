@@ -1,0 +1,252 @@
+---
+title: CI/CD to a Server
+description: Push to git → app deployed. Three solid patterns, from simplest to fanciest.
+---
+
+# CI/CD to a Server
+
+Once deploys involve more than `cp`, you want automation. Three patterns, ascending complexity:
+
+1. **`git pull` + restart** on the server. 10 lines of bash. Surprisingly fine for one app.
+2. **GitHub Actions over SSH.** CI builds, SSHs to your box, rsyncs the build, restarts.
+3. **GitOps pull-from-registry.** CI pushes a container image; the server periodically pulls and restarts. Used by serious teams.
+
+You don't need to skip ahead. Pattern 1 is where most personal projects live forever.
+
+---
+
+## Pattern 1 — `git pull` + restart
+
+On the server:
+
+```bash
+sudo useradd --system --home /opt/myapp --shell /bin/bash deploy
+sudo mkdir -p /opt/myapp
+sudo chown deploy:deploy /opt/myapp
+
+sudo -u deploy git clone https://github.com/you/myapp.git /opt/myapp
+```
+
+Add a deploy script:
+
+```bash filename="/opt/myapp/deploy.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /opt/myapp
+git fetch --all
+git reset --hard origin/main
+npm ci --omit=dev
+sudo systemctl restart myapp
+```
+
+```bash
+chmod +x /opt/myapp/deploy.sh
+```
+
+Allow the deploy user to restart only that one service via sudoers:
+
+```text filename="/etc/sudoers.d/deploy"
+deploy ALL=(root) NOPASSWD: /bin/systemctl restart myapp
+```
+
+```bash
+sudo chmod 440 /etc/sudoers.d/deploy
+sudo visudo -c        # syntax check
+```
+
+Deploy from your laptop:
+
+```bash
+ssh deploy@server "/opt/myapp/deploy.sh"
+```
+
+That's it. Real CI/CD with 30 lines of plain bash. For private repos: use a deploy key.
+
+> **Why a deploy user, not your normal one?** If the script is automated (CI, webhook), you don't want it to be able to do everything your user can. The sudoers rule lets `deploy` restart only `myapp`, nothing else.
+
+---
+
+## Pattern 2 — GitHub Actions over SSH
+
+Now let GitHub run the deploy on push:
+
+```yaml filename=".github/workflows/deploy.yml"
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install + test
+        run: |
+          npm ci
+          npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Rsync to server
+        uses: easingthemes/ssh-deploy@main
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          REMOTE_HOST: ${{ secrets.DEPLOY_HOST }}
+          REMOTE_USER: deploy
+          SOURCE: "./dist/"
+          TARGET: "/opt/myapp/dist/"
+          ARGS: "-avzc --delete"
+
+      - name: Restart on server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: deploy
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            sudo /bin/systemctl restart myapp
+```
+
+Setup steps:
+
+1. Generate an SSH key just for deploys:
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/deploy-myapp -C "github-actions-myapp"
+   ```
+2. Add the public key to `/home/deploy/.ssh/authorized_keys` on the server.
+3. Add the private key to GitHub repo secrets as `DEPLOY_SSH_KEY`.
+4. Add `DEPLOY_HOST` (your server's address) as another secret.
+
+Now every push to `main` triggers tests → build → rsync → restart. About 60 seconds total for a small app.
+
+Restrict the deploy key further with `command=` in `authorized_keys`:
+
+```text filename="~/.ssh/authorized_keys"
+command="/opt/myapp/deploy.sh",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA... github-actions-myapp
+```
+
+That key can **only** run `deploy.sh`. Even if it leaks, an attacker can't do anything else.
+
+---
+
+## Pattern 3 — Push a container image, pull on the server
+
+This is the modern, "lots of services" pattern.
+
+**On CI:**
+
+```yaml filename=".github/workflows/build.yml"
+name: Build image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: |
+            ghcr.io/you/myapp:latest
+            ghcr.io/you/myapp:${{ github.sha }}
+```
+
+**On the server:**
+
+Use [Watchtower](https://containrrr.dev/watchtower/) to auto-pull and redeploy:
+
+```yaml filename="compose.yaml"
+services:
+  app:
+    image: ghcr.io/you/myapp:latest
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --label-enable --interval 60   # check labeled services every minute
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d
+```
+
+Now: CI pushes new image → Watchtower detects it within a minute → docker pulls → container restarts. Fully automatic.
+
+Trade-offs:
+
+- ✅ Server has *no source code* — just images. Compromised server can't leak your code.
+- ✅ Rollbacks are easy: `docker compose pull && docker compose up -d` with a different tag.
+- ⚠️ The image registry is now a critical piece of infrastructure.
+- ⚠️ Watchtower auto-updating in prod is debated — some prefer manual `docker compose pull` so they control timing. You can add `WATCHTOWER_MONITOR_ONLY=true` and have it just *notify* you.
+
+---
+
+## Webhooks (Pattern 2.5)
+
+A neat middle ground: GitHub sends a webhook to your server on push, and a tiny script pulls + restarts.
+
+A 20-line "webhook receiver" written in any language works. Or use [webhook](https://github.com/adnanh/webhook), a Go binary purpose-built for this.
+
+```bash
+sudo dnf install -y golang
+go install github.com/adnanh/webhook@latest
+sudo cp ~/go/bin/webhook /usr/local/bin/
+```
+
+```yaml filename="/etc/webhook.yaml"
+- id: deploy-myapp
+  execute-command: /opt/myapp/deploy.sh
+  command-working-directory: /opt/myapp
+  response-message: ok
+  trigger-rule:
+    match:
+      type: payload-hmac-sha256
+      secret: "your-shared-secret"
+      parameter:
+        source: header
+        name: X-Hub-Signature-256
+```
+
+Run webhook on `:9000`, put it behind your reverse proxy on `https://deploy.example.com/hooks/deploy-myapp`, configure it as a webhook URL in GitHub repo settings. GitHub signs each payload; the receiver verifies. No SSH keys needed in CI.
+
+---
+
+## Patterns you can ignore
+
+- **FTP / SFTP "deploys."** Just don't.
+- **`scp`-in-a-loop "deploys."** rsync does it better and is a one-line drop-in upgrade.
+- **Long-lived SSH-from-CI sessions.** Tools like ssh-action open + close per step — keep it that way.
+- **"Just use Vercel/Netlify."** Fair! If your app is a static site or pure Next.js, the managed hosts are often the right answer. This whole course is about *understanding* the alternative, not avoiding hosted platforms forever.
+
+[Continue to *Hardening Checklist* →](/advanced/hardening-checklist)

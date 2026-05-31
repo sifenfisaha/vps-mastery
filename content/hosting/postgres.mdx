@@ -1,0 +1,194 @@
+---
+title: PostgreSQL on a Server
+description: Install, secure, and back up the world's most reliable database.
+---
+
+# PostgreSQL
+
+PostgreSQL is the default choice for almost any new project that needs a database. It's reliable, well-documented, and free. This lesson gets you a production-shaped install on Fedora.
+
+## Install
+
+```bash
+sudo dnf install -y postgresql-server postgresql-contrib
+sudo postgresql-setup --initdb
+sudo systemctl enable --now postgresql
+systemctl status postgresql
+```
+
+`postgresql-setup --initdb` is a one-time step that creates the data directory at `/var/lib/pgsql/data/` and writes the default configs. You only run it once per install.
+
+## The `postgres` system user
+
+The install created a system user named `postgres` that owns the database files and runs the server. To use any client tools, switch to that user:
+
+```bash
+sudo -u postgres psql
+```
+
+You're now at the `psql` prompt, connected to the default `postgres` database as the `postgres` superuser. Try:
+
+```sql
+\l           -- list databases
+\du          -- list roles (users)
+\q           -- quit
+```
+
+## Create a database and an app user
+
+```bash
+sudo -u postgres psql
+```
+
+```sql
+-- create a role (PG term for "user")
+CREATE ROLE helloapp WITH LOGIN PASSWORD 'a-strong-passphrase';
+
+-- create a database owned by that role
+CREATE DATABASE hello_db OWNER helloapp;
+
+\q
+```
+
+Test connecting:
+
+```bash
+psql -h 127.0.0.1 -U helloapp -d hello_db
+# Password: ...
+```
+
+> **Choosing passwords for DB users** — These passwords live in your app's environment file, not in your head. Generate them with `openssl rand -base64 24`. Rotate them like any other secret.
+
+## Two config files you'll edit
+
+```text
+/var/lib/pgsql/data/postgresql.conf      # tuning, what to listen on
+/var/lib/pgsql/data/pg_hba.conf          # WHO can connect HOW
+```
+
+### `postgresql.conf` — listen address
+
+By default, Fedora's PostgreSQL only listens on `localhost`. **Keep it that way** unless an app on a different host needs to connect.
+
+```ini filename="postgresql.conf"
+listen_addresses = 'localhost'        # default — keep
+```
+
+If you do need network access (say, another machine on Tailscale), change to a specific IP, not `'*'`:
+
+```ini
+listen_addresses = 'localhost,100.100.100.5'   # tailscale interface
+```
+
+### `pg_hba.conf` — auth rules
+
+This file decides who can connect, from where, to which database, and how. The order matters — first match wins.
+
+The defaults are decent:
+
+```text filename="pg_hba.conf"
+local   all   all                trust          # unix socket: trust local
+host    all   all   127.0.0.1/32 scram-sha-256  # IPv4 localhost: require password
+host    all   all   ::1/128      scram-sha-256  # IPv6 localhost: require password
+```
+
+For a tighter setup, restrict the `helloapp` role to its database only:
+
+```text
+local   hello_db   helloapp                  scram-sha-256
+host    hello_db   helloapp   127.0.0.1/32   scram-sha-256
+host    all        all        all            reject
+```
+
+After editing `pg_hba.conf`:
+
+```bash
+sudo systemctl reload postgresql
+```
+
+## Connecting from your Node.js app
+
+```bash
+npm install pg
+```
+
+```js
+// db.js
+const { Pool } = require('pg');
+const pool = new Pool({
+  host: '127.0.0.1',
+  port: 5432,
+  user: 'helloapp',
+  password: process.env.PG_PASSWORD,
+  database: 'hello_db',
+});
+module.exports = pool;
+```
+
+Provide `PG_PASSWORD` via the EnvironmentFile we set up in [Deploying a Node.js App](/hosting/deploying-a-node-app).
+
+## Backups — the only thing that matters
+
+Pick a strategy. Start with the simplest:
+
+### Daily `pg_dump`
+
+```bash
+sudo -u postgres pg_dump -Fc hello_db > /backups/hello_db-$(date +%F).dump
+```
+
+`-Fc` is the custom format — compressed, restorable selectively. The output file is what you'd email/copy to safety.
+
+To restore:
+
+```bash
+sudo -u postgres pg_restore -d hello_db /backups/hello_db-2026-05-31.dump
+```
+
+Automate the dump with a systemd timer (see [Cron & systemd Timers](/operations/cron-and-timers)) or a cron job, and **copy the dump off the server** — local backups don't help when the disk dies.
+
+### Streaming replication / WAL archiving (advanced)
+
+For real production: WAL (write-ahead log) archiving + base backups + a replica server. Read the PG docs once you outgrow `pg_dump`. For a learning lab, daily `pg_dump` to S3 or another host is plenty.
+
+## Tuning quickly
+
+The two settings that matter most for small servers (under ~16 GB RAM):
+
+```ini filename="postgresql.conf"
+shared_buffers = 256MB           # rule of thumb: 25% of RAM, capped at 1-2GB
+effective_cache_size = 1GB       # rough estimate of OS page cache available
+```
+
+Restart after changing these:
+
+```bash
+sudo systemctl restart postgresql
+```
+
+Don't over-tune. Defaults are sane up to several GB of data and modest QPS.
+
+## Watching it
+
+```bash
+# is it running?
+systemctl status postgresql
+
+# how many connections, who?
+sudo -u postgres psql -c "SELECT pid, usename, state, query FROM pg_stat_activity;"
+
+# disk space
+sudo du -sh /var/lib/pgsql/data
+
+# logs
+sudo journalctl -u postgresql -n 100 --no-pager
+```
+
+## What you should remember
+
+- Postgres listens on `localhost` by default. Keep it there unless you need otherwise.
+- `pg_hba.conf` is the access control. Trust nothing by default, match specifically.
+- Backups via `pg_dump` daily, copied off-box. This is the most important thing.
+- Don't run untrusted SQL as the `postgres` superuser. Make an app-scoped role.
+
+[Continue to *Docker Basics* →](/hosting/docker)

@@ -1,0 +1,114 @@
+---
+title: Anatomy of a Linux Server
+description: Kernel, init, services, users, ports. The five layers every server has.
+---
+
+# Anatomy of a Linux Server
+
+You don't need to understand the kernel to use Linux, the same way you don't need to understand an internal combustion engine to drive. But knowing the **five layers** of every Linux server will save you weeks of confusion later.
+
+## Layer 1 — The Kernel
+
+The kernel is the program that starts when you turn the computer on. It does three jobs:
+
+- Talk to hardware (CPU, RAM, disks, network card)
+- Run other programs and keep them isolated from each other
+- Provide a shared filesystem and network API
+
+You almost never interact with the kernel directly. You'll see it briefly when you run `uname -a` or read boot logs.
+
+```bash
+uname -a
+# Linux fedora 6.x.x ... GNU/Linux
+```
+
+## Layer 2 — The Init System (`systemd`)
+
+After the kernel boots, exactly one program is started: the **init system**. On modern Linux (Fedora, Ubuntu, Debian, Arch), that's `systemd`.
+
+`systemd`'s job is to start, stop, and supervise **services** (also called "units" or "daemons"). When you log in, `systemd` has already started:
+
+- `sshd` — the SSH server, so you can log in
+- `NetworkManager` — networking
+- `firewalld` — the firewall
+- ...usually 30–50 more
+
+You'll spend a lot of time talking to systemd. The command is `systemctl`:
+
+```bash
+systemctl status sshd
+systemctl list-units --type=service
+```
+
+## Layer 3 — Services (a.k.a. daemons)
+
+A service is a long-running program. Examples you'll meet in this course:
+
+| Service | What it does |
+| --- | --- |
+| `sshd` | Accepts SSH logins |
+| `firewalld` | Filters incoming network traffic |
+| `nginx` / `caddy` | Serves websites |
+| `postgresql` | Runs the database |
+| `docker` | Runs containers |
+
+The pattern is always the same: install the package → enable the service (so it starts at boot) → start the service. We'll do this dozens of times.
+
+## Layer 4 — Users
+
+Linux is a **multi-user** system from day one. Every running program runs as some user. Every file is owned by some user.
+
+The most important user is **root** — the administrator who can do anything, including destroy the system. You'll create your own user (or already have one) and use `sudo` to do admin work, instead of logging in as root directly. Why? Because typos are forever, and root has no safety net.
+
+We cover this in detail in [Users, Root & sudo](/linux-basics/users-and-sudo).
+
+## Layer 5 — Network Ports
+
+Your server has one (or a few) IP addresses. On each IP, there are **65,535 ports** — numbered "doors" where services accept connections.
+
+Some you should memorize:
+
+| Port | Used for |
+| --- | --- |
+| `22` | SSH |
+| `80` | HTTP (websites without HTTPS) |
+| `443` | HTTPS (websites with HTTPS) |
+| `5432` | PostgreSQL |
+| `3306` | MySQL/MariaDB |
+
+A server is only **reachable** at a port if:
+
+1. A service is running and listening on it, AND
+2. The firewall is allowing traffic to it.
+
+If a port isn't working, it's always one of those two. Always.
+
+## Putting it together
+
+Picture your Fedora box like this:
+
+```text
+┌─────────────────────────────────────────────────┐
+│ Kernel (talks to CPU, RAM, disks, network)      │
+│                                                 │
+│   systemd (starts and supervises everything)    │
+│                                                 │
+│     ┌──────────┐  ┌──────────┐  ┌───────────┐   │
+│     │  sshd    │  │  nginx   │  │ postgres  │   │
+│     │ port 22  │  │ port 443 │  │ port 5432 │   │
+│     └──────────┘  └──────────┘  └───────────┘   │
+│                                                 │
+│   Users: root, alfie, postgres, ...             │
+└─────────────────────────────────────────────────┘
+       ▲              ▲              ▲
+       │              │              │
+   firewalld decides who can reach which port
+       │              │              │
+       └────  Network (LAN / Internet)
+```
+
+That's the whole game. The rest of this course is just learning to **command the five layers**.
+
+Next: actually log in.
+
+[Continue to *Your First SSH Connection* →](/foundations/first-ssh-connection)

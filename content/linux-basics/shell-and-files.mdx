@@ -1,0 +1,181 @@
+---
+title: The Shell & Files
+description: Move around the filesystem, read and edit files, redirect output. The day-1 tools.
+---
+
+# The Shell & Files
+
+The **shell** is the program that interprets what you type. The most common one on Linux is **bash**, and Fedora ships with it. When you SSH in, you land in a bash shell.
+
+Your job in this lesson: get fluent with the 15 commands you'll use every single day.
+
+## The shape of a command
+
+```bash
+command  [options]  [arguments]
+```
+
+For example:
+
+```bash
+ls -la /etc
+```
+
+- `ls` — the command (list directory contents)
+- `-la` — two options bundled (`-l` for long form, `-a` for "include hidden")
+- `/etc` — the argument (which directory to list)
+
+When something doesn't work, the first question is always "what command, what options, what arguments?"
+
+## Moving around
+
+```bash
+pwd                  # print working directory — "where am I?"
+ls                   # list files here
+ls -la               # long listing including hidden (dotfiles)
+ls /var/log          # list a different directory
+cd /etc              # change directory
+cd ~                 # go home (same as `cd` with no args)
+cd -                 # go back to previous directory
+```
+
+### Paths
+
+- **Absolute path** — starts with `/`. Example: `/etc/ssh/sshd_config`. It means the same thing from anywhere.
+- **Relative path** — does *not* start with `/`. Example: `ssh/sshd_config`. Means "from wherever I currently am, then into `ssh/`, then `sshd_config`."
+- `.` means "the current directory."
+- `..` means "the directory above."
+- `~` means "my home directory" (usually `/home/yourname`).
+
+```bash
+cd ..                # go up one level
+cd ../..             # go up two levels
+cp ./foo.txt ~/      # copy foo.txt from here into my home
+```
+
+## Reading files
+
+```bash
+cat /etc/os-release       # print whole file
+less /var/log/messages    # scrollable viewer (q to quit, / to search)
+head -20 file.log         # first 20 lines
+tail -20 file.log         # last 20 lines
+tail -f /var/log/messages # follow live (Ctrl-C to stop)
+```
+
+`tail -f` is the single most useful command for debugging a running service. Memorize it.
+
+## Creating, copying, moving, deleting
+
+```bash
+mkdir mydir              # make directory
+mkdir -p a/b/c           # make nested directories
+touch file.txt           # create an empty file
+cp source dest           # copy
+cp -r src/ dest/         # copy a whole directory
+mv old new               # rename or move
+rm file.txt              # delete file
+rm -r dir/               # delete directory (CAREFUL)
+```
+
+> **The most dangerous command on Linux** — `rm -rf /something`. It deletes everything under that path with no confirmation. There is no recycle bin. Triple-check the path before pressing Enter. Never run `rm -rf` with a variable like `rm -rf $DIR/` without first verifying `$DIR` is set to what you expect.
+
+## Editing files
+
+Two editors are on every server. Pick one.
+
+### `nano` — easy, beginner-friendly
+
+```bash
+nano /tmp/notes.txt
+```
+
+The bottom of the screen shows the shortcuts. `^X` means Ctrl-X (to exit), `^O` to save. That's 90% of what you need.
+
+### `vim` — powerful, intimidating, ubiquitous
+
+```bash
+vim /tmp/notes.txt
+```
+
+Three things to learn first:
+
+- Press `i` to enter **insert mode** (you can type normally).
+- Press `Esc` to leave insert mode.
+- Type `:wq` then Enter to **w**rite and **q**uit. `:q!` to quit without saving.
+
+Don't try to learn all of vim today. Just remember those three.
+
+## Redirection and pipes
+
+This is where the terminal becomes a superpower.
+
+```bash
+echo "hello" > file.txt        # > overwrites file with output
+echo "more" >> file.txt        # >> appends
+ls -la > listing.txt           # save output to file
+
+cat file.log | grep "error"    # | pipes output of one command into another
+ls -la | grep "\.conf$"        # only lines ending in .conf
+ps aux | grep nginx            # find nginx processes
+```
+
+The pipe (`|`) is the heart of Unix. Small tools, each doing one thing, chained together.
+
+## Finding things
+
+```bash
+which python3                       # path to a command
+find /etc -name "*.conf"            # files matching a pattern
+grep -r "PermitRootLogin" /etc/ssh  # search inside files (recursive)
+```
+
+`grep` is for **content** inside files. `find` is for **filenames**. Mix them up at your peril.
+
+## Wildcards
+
+The shell expands wildcards before passing arguments to the command:
+
+```bash
+ls *.txt           # all .txt files in current directory
+rm tmp_*           # everything starting with tmp_
+cp /etc/*.conf ~/  # all .conf files in /etc
+```
+
+## Tab completion is your friend
+
+Type the first few letters of a command or filename, press **Tab**. The shell will complete it if there's a unique match, or show options if there isn't. This single trick prevents 90% of typos.
+
+```bash
+syst<TAB>           # completes to systemctl
+cat /etc/os<TAB>    # completes to /etc/os-release
+```
+
+## History
+
+```bash
+history             # everything you've typed
+!!                  # rerun the last command
+sudo !!             # rerun the last command with sudo (very common)
+Ctrl-R              # interactive reverse search
+```
+
+`Ctrl-R` is a game-changer. Press it, start typing any part of a previous command, and it'll pop up. Press it again to cycle older matches.
+
+## The single exercise
+
+SSH into your Fedora box and, without copy-pasting, do this:
+
+```bash
+cd ~
+mkdir -p vps-lab/notes
+cd vps-lab/notes
+echo "day 1 of vps mastery" > log.txt
+echo "today I learned: $(date)" >> log.txt
+cat log.txt
+ls -la
+```
+
+If you understand every line, you're ready for permissions.
+
+[Continue to *Permissions & Ownership* →](/linux-basics/permissions)

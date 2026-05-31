@@ -1,0 +1,144 @@
+---
+title: Domains & TLS Certificates
+description: Get a real domain, point it at your server, and serve everything over HTTPS for free.
+---
+
+# Domains & TLS Certificates
+
+You can't serve real production traffic on an IP address. You need:
+
+1. **A domain name** that points at your server.
+2. **A TLS certificate** so browsers trust your HTTPS.
+
+Both are easy and free in 2026.
+
+## Step 1 — Buy a domain
+
+Three registrars worth recommending:
+
+- **Cloudflare Registrar** — wholesale prices, no markup, free WHOIS privacy. Best if you also want Cloudflare Tunnel.
+- **Porkbun** — great prices, clean UI.
+- **Namecheap** — large catalog, ubiquitous.
+
+Pick a `.com` if you can; `.dev`, `.app`, `.xyz`, `.me` are all fine too. Expect $8–$15/year.
+
+## Step 2 — Decide how DNS will work
+
+There are two paths from here:
+
+### Path A — Tunnel-only (recommended for home servers)
+
+Use [Cloudflare Tunnel](/remote-access/cloudflare-tunnel). Cloudflare gets the traffic and forwards it down a tunnel to your server. Cloudflare handles the certificate. You don't open any router ports.
+
+- Pros: no public IP exposure, free HTTPS, easy.
+- Cons: tied to Cloudflare; one extra hop.
+
+### Path B — Direct (cloud VPS, or home + port forwarding)
+
+DNS points directly at your server's public IP. The server runs Caddy (or Nginx+certbot), which obtains a Let's Encrypt certificate by proving it owns the domain.
+
+- Pros: no third party in the path, simpler mental model.
+- Cons: your public IP is exposed; on a home connection you need port forwarding.
+
+In both paths, the steps below are similar.
+
+## Step 3 — Point DNS at the server
+
+In Cloudflare (or your DNS provider), create one of:
+
+- **A record** — `myapp.example.com` → `203.0.113.42` (IPv4). For path B.
+- **CNAME record** — `myapp.example.com` → `<tunnel-uuid>.cfargotunnel.com`. For path A; `cloudflared tunnel route dns` creates this for you.
+
+Verify from your laptop:
+
+```bash
+dig myapp.example.com +short
+# 203.0.113.42        # or the CNAME chain
+```
+
+If you see your IP, DNS is working. Allow ~5 minutes for new records to propagate.
+
+> **TTL & propagation** — older guides talk about DNS taking 24 hours to propagate. In practice, modern DNS (especially Cloudflare's) propagates in under a minute. Brand-new domain registrations can take a few hours for *registry* propagation though. If `dig` from outside your machine still doesn't see the record after 30 minutes, double-check the record type and the trailing dot.
+
+## Step 4 — TLS certificates
+
+Two layers of automation, from most to least magical:
+
+### a. Caddy (zero config)
+
+If you used Caddy ([Web Servers](/hosting/nginx-and-caddy)), you already have HTTPS. Caddy obtained a Let's Encrypt cert the first time someone hit the domain. Certs renew themselves.
+
+Verify:
+
+```bash
+curl -vI https://myapp.example.com 2>&1 | grep -E "(HTTP|expire|issuer)"
+```
+
+That's it. Done.
+
+### b. Nginx + certbot
+
+If you used Nginx:
+
+```bash
+sudo dnf install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d myapp.example.com -d www.myapp.example.com
+```
+
+certbot will:
+
+1. Verify domain ownership by serving a challenge file (HTTP-01 challenge).
+2. Get a 90-day certificate from Let's Encrypt.
+3. Edit your Nginx config to listen on 443 with the certificate.
+4. Install a systemd timer that renews everything automatically (`certbot-renew.timer`).
+
+Verify the timer:
+
+```bash
+systemctl list-timers | grep certbot
+```
+
+### c. DNS-01 challenge (wildcard certs)
+
+If you want `*.example.com` (a wildcard), the HTTP challenge doesn't work — you need the DNS-01 challenge, which proves ownership by creating a DNS TXT record.
+
+```bash
+sudo certbot certonly --manual --preferred-challenges dns -d "*.example.com" -d example.com
+```
+
+It'll ask you to create a TXT record (`_acme-challenge.example.com`). Add it in Cloudflare, wait a minute, then continue. The cert is saved to `/etc/letsencrypt/live/example.com/`.
+
+For automation, use a DNS plugin (`certbot-dns-cloudflare`) so you don't have to manually edit DNS each renewal.
+
+### d. Cloudflare-only certs (path A)
+
+If you used Cloudflare Tunnel, Cloudflare's edge has the cert — your origin doesn't need one. You're done.
+
+## How HTTPS actually works (short version)
+
+When a browser visits `https://myapp.example.com`:
+
+1. TCP connection to your server on port 443.
+2. **TLS handshake** — server presents its certificate. The certificate is just a public key + a signature from a **Certificate Authority** (Let's Encrypt, in our case) saying "yes, this key owns this domain."
+3. Browser checks the signature against its built-in trust store of CAs.
+4. They negotiate a session key and start sending encrypted HTTP.
+
+That's all "HTTPS" is. Public-key crypto, plus a trusted middleman vouching for who owns what.
+
+Let's Encrypt is free and trusted by every browser. The 90-day expiry is intentional — short-lived certs reduce the damage of a compromised key.
+
+## Common breakage
+
+- **"cert valid for example.com but visited www.example.com"** → you got a cert for one but not the other. Re-run certbot/Caddy listing both names.
+- **"Let's Encrypt rate limit exceeded"** → you tried more than 5 cert attempts for the same domain in an hour. Switch to staging while debugging: `certbot --staging ...`.
+- **"Certificate has expired"** → the auto-renewal stopped. Check `journalctl -u certbot-renew.service` or `journalctl -u caddy` for errors. Renewal needs port 80 reachable.
+
+## What you should have now
+
+- A domain name you own.
+- A DNS record pointing somewhere your server (or tunnel) can answer.
+- A working `https://yourdomain.com` URL (even if it just shows the default nginx page).
+
+That's the foundation. Now we deploy a real app behind it.
+
+[Continue to *Deploying a Node.js App* →](/hosting/deploying-a-node-app)

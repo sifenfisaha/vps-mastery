@@ -1,0 +1,197 @@
+---
+title: Hardening SSH
+description: Stop password brute-forcers cold. Five changes that take 10 minutes.
+---
+
+# Hardening SSH
+
+Within minutes of putting any server on the public internet, automated scripts try `root` + common passwords on port 22. These five changes shut that down completely.
+
+> **Do these in order** and keep your existing SSH session open while you work. If you make a mistake, you can still fix it from that session. Only close it after a *new* session works.
+
+## The file you'll be editing
+
+```bash
+sudo nano /etc/ssh/sshd_config
+```
+
+On Fedora, files in `/etc/ssh/sshd_config.d/` override this — that's the cleaner place for custom changes. Either is fine. We'll use the main file for clarity.
+
+## Change 1 — Use SSH keys only, no passwords
+
+You already set up key login in [Your First SSH Connection](/foundations/first-ssh-connection). Now turn passwords off entirely.
+
+Find these lines (uncomment if needed) and set them to:
+
+```ssh-config filename="/etc/ssh/sshd_config"
+PasswordAuthentication no
+PubkeyAuthentication yes
+ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
+UsePAM yes
+```
+
+Save and exit.
+
+**Verify your keys still work first**, then apply:
+
+```bash
+# In your laptop terminal, in a NEW window (keep the old SSH session open):
+ssh fedora exit
+# That command succeeded? Good. Now apply:
+
+# Back in your existing SSH session on the server:
+sudo systemctl restart sshd
+```
+
+If you're locked out, your existing session (which is still alive) lets you revert.
+
+## Change 2 — Disable root login
+
+You shouldn't be SSHing in as root anyway — use your normal user + sudo.
+
+```ssh-config filename="/etc/ssh/sshd_config"
+PermitRootLogin no
+```
+
+```bash
+sudo systemctl restart sshd
+```
+
+## Change 3 — Limit who can SSH in
+
+Restrict SSH to specific users by name:
+
+```ssh-config filename="/etc/ssh/sshd_config"
+AllowUsers alfie
+```
+
+You can also use `AllowGroups`. If you have multiple admin users, list them space-separated.
+
+## Change 4 — Change the SSH port (optional, debatable)
+
+Moving SSH off port 22 to something like 2222 dramatically reduces log noise from drive-by scanners. It's **security through obscurity** — not real security — but it's free and the logs become quieter.
+
+```ssh-config filename="/etc/ssh/sshd_config"
+Port 2222
+```
+
+Then open the new port in the firewall:
+
+```bash
+sudo firewall-cmd --permanent --add-port=2222/tcp
+sudo firewall-cmd --reload
+```
+
+Restart sshd, and test connecting from another terminal **before** closing your current session:
+
+```bash
+ssh -p 2222 alfie@fedora
+```
+
+When that works, you can remove the old service:
+
+```bash
+sudo firewall-cmd --permanent --remove-service=ssh
+sudo firewall-cmd --reload
+```
+
+You can also update your laptop's `~/.ssh/config`:
+
+```ssh-config
+Host fedora
+    HostName 192.168.1.42
+    Port 2222
+    User alfie
+```
+
+So `ssh fedora` still just works.
+
+> **The debate** — some sysadmins consider moving SSH a waste of time because the attacker who matters will port-scan and find it. They're right. But it really does cut your logs by 99%. Both views are valid; if logs matter to you, change it. If they don't, don't bother.
+
+## Change 5 — Install Fail2ban
+
+`fail2ban` watches your auth log for failed login attempts. After N failures from one IP, it tells the firewall to drop that IP for X minutes.
+
+```bash
+sudo dnf install -y fail2ban
+sudo systemctl enable --now fail2ban
+```
+
+Create a local config (don't edit `jail.conf` directly — it gets overwritten on updates):
+
+```bash
+sudo nano /etc/fail2ban/jail.local
+```
+
+```ini filename="/etc/fail2ban/jail.local"
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+ignoreip = 127.0.0.1/8 ::1 192.168.0.0/16 10.0.0.0/8
+
+[sshd]
+enabled = true
+port    = 2222
+backend = systemd
+```
+
+- `bantime 1h` — drop IP for 1 hour after a ban
+- `findtime 10m` — count failures over a rolling 10-minute window
+- `maxretry 5` — 5 failures = ban
+- `ignoreip` — never ban these (your own LAN + localhost)
+- Note: set `port = 2222` if you changed it. Default is `ssh` (port 22).
+
+Apply:
+
+```bash
+sudo systemctl restart fail2ban
+sudo fail2ban-client status sshd
+```
+
+You'll see currently banned IPs and the count of failed attempts.
+
+## Verify your work
+
+```bash
+# From your laptop, in a fresh terminal:
+ssh fedora hostname
+```
+
+Should land instantly. Try the wrong things and confirm they fail:
+
+```bash
+# Old port?
+ssh -p 22 alfie@fedora hostname   # connection refused (if you moved it)
+
+# Password auth?
+ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password fedora
+# Permission denied (publickey).
+
+# Root?
+ssh root@fedora
+# Permission denied (publickey,...).
+```
+
+If all three fail in the right way, you're hardened.
+
+## One more, free: keep things up to date
+
+```bash
+sudo dnf upgrade -y
+```
+
+Run it weekly. SSH (and the kernel) get security patches that matter.
+
+## What you just did
+
+- Killed password brute-force (no passwords accepted)
+- Killed direct root login
+- Limited which users can SSH in
+- (Optional) Moved SSH off port 22 → 99% less log noise
+- Banned repeat offenders automatically via fail2ban
+
+This is the same checklist used on production servers. Welcome.
+
+[Continue to *Remote Access* →](/remote-access)

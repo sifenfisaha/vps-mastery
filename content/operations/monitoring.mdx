@@ -1,0 +1,158 @@
+---
+title: Monitoring Basics
+description: Know it's broken before your users do. Start small, grow up to Prometheus.
+---
+
+# Monitoring Basics
+
+Monitoring is two things:
+
+1. **Observation** — what's the system doing right now? (CPU, memory, disk, latency)
+2. **Alerting** — let me know when something is wrong, ideally **before** users do.
+
+For a learning lab, start small. For a real production setup, eventually graduate to Prometheus + Grafana + Alertmanager (or a hosted equivalent like Grafana Cloud, Datadog, etc.). This lesson covers both ends of that spectrum.
+
+## What to actually watch
+
+Four numbers cover 95% of "is the box healthy?":
+
+| Metric | When it's bad | How to check |
+| --- | --- | --- |
+| **CPU load** | Sustained near 100% across all cores | `uptime`, `htop` |
+| **Memory** | Free RAM near zero + swap heavy | `free -h`, `htop` |
+| **Disk space** | Any partition over ~85% | `df -h` |
+| **Disk I/O wait** | `wa` in top consistently > 20% | `top`, `iostat` |
+
+Then per service:
+
+- Is it running? (`systemctl is-active myservice`)
+- Are recent requests succeeding? (`curl -fsS https://mysite.example/health`)
+
+## Quick manual health check
+
+A one-liner to drop in your `~/.bashrc` as an alias:
+
+```bash
+alias health='echo "--- uptime ---"; uptime; \
+  echo "--- mem ---"; free -h; \
+  echo "--- disk ---"; df -h | grep -v tmpfs; \
+  echo "--- top services ---"; \
+  systemctl --failed; \
+  echo "--- nginx 5xx (last 100) ---"; \
+  sudo tail -100 /var/log/nginx/access.log 2>/dev/null | awk "\$9 ~ /5../" | tail'
+```
+
+Running `health` whenever you SSH in becomes second nature.
+
+## Easy first monitoring: Uptime Kuma
+
+Uptime Kuma is a self-hosted "is it up?" service. Pings your URLs, sends you a notification if they fail. One Docker container.
+
+```bash
+docker volume create uptime-kuma
+docker run -d --restart=always \
+  --name uptime-kuma \
+  -p 127.0.0.1:3001:3001 \
+  -v uptime-kuma:/app/data \
+  louislam/uptime-kuma:1
+```
+
+Then put it behind Caddy / Nginx with a subdomain. From the UI you can:
+
+- Add HTTP monitors (`https://mysite.example.com/health`)
+- Add ping monitors (just ICMP)
+- Wire up notifications (email, Telegram, Discord, Slack, ntfy, Pushover, webhook...)
+- See uptime % over time
+
+This single tool will save you "the site has been down for 3 hours and nobody noticed."
+
+## Lightweight system metrics: `node_exporter`
+
+When you want graphs of CPU/RAM/disk/network over time:
+
+```bash
+# Install prometheus-node-exporter
+sudo dnf install -y golang-github-prometheus-node-exporter
+sudo systemctl enable --now prometheus-node-exporter
+
+# By default it listens on :9100 with metrics at /metrics
+curl http://127.0.0.1:9100/metrics | head -30
+```
+
+That's a Prometheus-format text stream of dozens of metrics — CPU per mode, RAM, disk space, network bytes, filesystem inodes, system load, etc.
+
+`node_exporter` alone gives you the data. You need a **scraper** that periodically reads it and a **dashboard** that draws graphs.
+
+## The full grown-up stack: Prometheus + Grafana
+
+We'll fully wire this up in the [Advanced](/advanced) section. The short version:
+
+```text
+┌──────────────┐         ┌────────────┐          ┌──────────┐
+│ node_exporter│ ◀─pull─ │ Prometheus │ ◀─query─ │ Grafana  │
+│  on each box │         │ (scrapes & │          │  (charts │
+└──────────────┘         │   stores)  │          │  + alerts│
+                          └─────┬──────┘         └──────────┘
+                                │
+                          ┌─────▼──────────┐
+                          │ Alertmanager   │
+                          │ (sends pages)  │
+                          └────────────────┘
+```
+
+All three run as containers / systemd services. The bottom line: when something crosses a threshold (CPU > 90% for 5 minutes), Alertmanager fires a webhook to Discord/PagerDuty/email.
+
+## Alerting principles
+
+A few that I wish more people knew:
+
+1. **Alert on symptoms users feel, not internal metrics.** "5xx rate > 1%" is a user-visible symptom; "Redis memory > 80%" is an internal warning, not a page-someone alert.
+2. **Every alert must be actionable.** If you'd open the email and immediately delete it, the alert is noise. Delete the alert, not the email.
+3. **Alert on absence, too.** "I've gone 5 minutes without a single 200 response" catches things that are silently broken.
+4. **Test your alerting once a quarter.** An alert that didn't actually wake you up isn't real.
+
+## Per-app health checks
+
+The simplest, most useful thing you can add to any app you deploy: a `/health` endpoint.
+
+```js
+app.get('/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');             // check downstream deps
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    res.status(503).json({ ok: false, error: e.message });
+  }
+});
+```
+
+Then have Uptime Kuma / your monitor hit `/health` every 60s. If it goes red, you know.
+
+## Resource limits, the easy version
+
+systemd can cap how much CPU / memory each service uses, so a runaway app can't take the whole box down:
+
+```ini filename="/etc/systemd/system/myapp.service.d/limits.conf"
+[Service]
+MemoryMax=512M
+CPUQuota=80%
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart myapp
+```
+
+That's a "drop-in" file — overrides on top of the main service unit. systemd composes them automatically.
+
+## Putting it together: a "good enough" home lab setup
+
+For a learning VPS:
+
+1. ✅ `health` alias in your shell — for ad-hoc looks.
+2. ✅ Uptime Kuma checking your sites every minute — alerts to Telegram or Discord.
+3. ✅ `node_exporter` collecting metrics on the box.
+4. ✅ `/health` endpoint in every app you deploy.
+5. ⏳ Grafana + Prometheus when you have 2+ servers and want pretty graphs.
+
+[Continue to *Backups* →](/operations/backups)

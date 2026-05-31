@@ -1,0 +1,187 @@
+---
+title: Logs & journalctl
+description: Where everything your server does ends up — and how to find what you need fast.
+---
+
+# Logs & `journalctl`
+
+On modern Linux, almost every service's logs land in **the journal** — a single, indexed, structured log managed by `systemd-journald`. You access it with `journalctl`.
+
+There are also older-school text logs in `/var/log/` for some services. We'll cover both.
+
+## The five commands that solve 90% of problems
+
+```bash
+# Live tail of one service
+journalctl -u sshd -f
+
+# Last 200 lines of one service
+journalctl -u nginx -n 200
+
+# Only since boot
+journalctl -u myapp -b
+
+# Time range
+journalctl -u myapp --since "2 hours ago"
+journalctl -u myapp --since "2026-05-31 09:00" --until "2026-05-31 10:00"
+
+# Only errors and worse
+journalctl -p err -b
+```
+
+Bookmark this. It's everything you need.
+
+## Useful flags
+
+```bash
+journalctl --no-pager        # don't paginate (good for grep)
+journalctl -e                # jump to the end
+journalctl -r                # reverse order (newest first)
+journalctl -k                # only kernel messages (= dmesg)
+journalctl --user            # only user-level units (rare)
+journalctl --disk-usage      # how much disk is the journal using?
+```
+
+## Filtering by priority
+
+`syslog`-style priorities, lowest number = most severe:
+
+| Level | Meaning |
+| --- | --- |
+| 0 emerg | system is unusable |
+| 1 alert | action must be taken immediately |
+| 2 crit | critical conditions |
+| 3 err | errors |
+| 4 warning | warnings |
+| 5 notice | normal but significant |
+| 6 info | informational |
+| 7 debug | debug-level messages |
+
+```bash
+journalctl -p err -b        # this boot, only errors and worse
+journalctl -p warning..err  # range
+```
+
+## Searching by free text
+
+```bash
+journalctl -u myapp | grep -i "timeout"
+journalctl -u myapp --grep "timeout"      # built-in grep, faster
+```
+
+## Per-process / per-binary filtering
+
+If you don't know which unit emitted the message:
+
+```bash
+journalctl _COMM=postgres -n 100     # by process name
+journalctl _PID=1234 -n 100          # by PID
+```
+
+Tab-complete `_<TAB>` to see all field filters.
+
+## How big is the journal, and how to limit it
+
+```bash
+journalctl --disk-usage
+```
+
+The journal lives at `/var/log/journal/`. By default it grows until 10% of the disk. To cap it explicitly:
+
+```ini filename="/etc/systemd/journald.conf"
+[Journal]
+SystemMaxUse=500M
+SystemKeepFree=1G
+MaxFileSec=1month
+```
+
+Apply:
+
+```bash
+sudo systemctl restart systemd-journald
+```
+
+To manually trim:
+
+```bash
+sudo journalctl --vacuum-size=200M
+sudo journalctl --vacuum-time=7d
+```
+
+## The old-school `/var/log/`
+
+Not everything uses the journal. You'll find text logs at:
+
+```text
+/var/log/nginx/access.log    # nginx access log
+/var/log/nginx/error.log     # nginx error log
+/var/log/messages            # general system messages (some distros)
+/var/log/secure              # auth attempts (sshd)
+/var/log/dnf.log             # package operations
+```
+
+Read them the same way:
+
+```bash
+sudo tail -f /var/log/nginx/error.log
+sudo less /var/log/secure
+```
+
+## Log rotation (you usually don't have to think about this)
+
+Text logs grow forever unless rotated. Fedora ships `logrotate`, a daily cron job that:
+
+- Renames `error.log` → `error.log.1`
+- Compresses older copies (`error.log.2.gz`, ...)
+- Deletes copies older than N days
+- Sends the service a signal (e.g., SIGHUP) so it reopens the new file
+
+You'll find rotation rules in `/etc/logrotate.d/`. Most services that install via dnf already set up rotation — you only need to write a `logrotate` config for hand-rolled apps that write their own text logs.
+
+journalctl doesn't need logrotate; journald handles its own rotation via `SystemMaxUse`.
+
+## Reading like a pro
+
+When you're debugging a problem at 11pm, your eyes go straight to:
+
+```bash
+# When did the bad thing start?
+journalctl -u myapp --since "1 hour ago" -p warning
+
+# What happened around then in the system?
+journalctl --since "10 minutes ago" -p err
+
+# Show me everything from the relevant minute, all services:
+journalctl --since "11:23" --until "11:24"
+```
+
+Cross-correlate across services. Nginx errors at the same minute as Postgres errors at the same minute as your app errors = an easy story to tell.
+
+## A worked example: "the site is slow"
+
+```bash
+# Step 1: app logs — anything weird?
+journalctl -u myapp -n 200 --no-pager | grep -iE "(error|timeout|slow|warn)"
+
+# Step 2: Nginx — what's the request volume look like?
+sudo tail -100 /var/log/nginx/access.log
+
+# Step 3: System health
+htop                                        # CPU/RAM hot?
+df -h                                       # disk full?
+sudo journalctl -k --since "30 min ago"     # kernel complaints (OOM killer?)
+
+# Step 4: Database
+journalctl -u postgresql -n 100 --no-pager  # any long queries / connection limits?
+```
+
+Eventually you'll fold steps 1–4 into a dashboard ([Monitoring Basics](/operations/monitoring)). Before then, do them manually with these commands and you can debug anything.
+
+## What you should remember
+
+- `journalctl -u <service> -f` and `-n 200` will be your most-typed commands.
+- Time filters (`--since`, `--until`) win 80% of debug sessions.
+- Errors love clustering — when one service screams, the others usually screamed too.
+- Logs are useless if you never read them. Make a habit of skimming them weekly even when nothing's broken.
+
+[Continue to *Monitoring Basics* →](/operations/monitoring)

@@ -1,0 +1,188 @@
+---
+title: Docker Basics
+description: Containerize so you stop polluting the host OS.
+---
+
+# Docker Basics
+
+Docker lets you package an app and all its dependencies (OS libraries, runtime, config) into a portable **image**, then run that image as one or more **containers**. Two huge wins on a server:
+
+1. **Reproducible.** What works on your laptop works on the server, byte-for-byte.
+2. **Isolated.** You can install five Node versions, three Python versions, Mongo, Redis, and Postgres without any of them touching each other or the host OS.
+
+Fedora actually ships **Podman**, which is API-compatible with Docker. Most beginners install Docker proper because tutorials say so; Podman works for almost everything and doesn't run as root. We'll show Docker, with podman aliases noted.
+
+## Install Docker on Fedora
+
+```bash
+# Add Docker's repo
+sudo dnf -y install dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+
+# Avoid typing sudo for every docker command — add yourself to the docker group:
+sudo usermod -aG docker $USER
+newgrp docker   # apply now without re-login (or just log out/in)
+
+docker --version
+docker info
+```
+
+> **The `docker` group is effectively root.** Anyone who can run docker can spawn a container that mounts the host filesystem. That's by design but worth knowing. On multi-user boxes, this is why people prefer rootless podman or a single docker admin user.
+
+## Run your first container
+
+```bash
+docker run --rm hello-world
+```
+
+That command:
+
+1. Pulled the `hello-world` image from Docker Hub (the default registry).
+2. Created a container from it.
+3. Ran the container, which printed a message and exited.
+4. `--rm` deleted the container after it stopped.
+
+## The five verbs
+
+```bash
+docker pull <image>           # download an image
+docker run [opts] <image>     # create + start a container from an image
+docker ps                     # list running containers
+docker ps -a                  # list ALL containers (incl. stopped)
+docker images                 # list local images
+docker stop <name|id>         # graceful stop
+docker rm <name|id>           # delete a stopped container
+docker rmi <image>            # delete an image
+docker logs <name|id>         # show stdout/stderr
+docker exec -it <name> bash   # open a shell inside a running container
+```
+
+You'll use `run`, `ps`, `logs`, and `exec` more than anything else.
+
+## Running a real service: Nginx
+
+```bash
+docker run -d \
+  --name web \
+  -p 8080:80 \
+  -v /var/www:/usr/share/nginx/html:ro \
+  nginx:alpine
+```
+
+Breakdown:
+
+- `-d` — detached (background)
+- `--name web` — friendly name
+- `-p 8080:80` — map host port 8080 → container port 80
+- `-v /var/www:/usr/share/nginx/html:ro` — bind-mount a host dir, read-only
+- `nginx:alpine` — image with tag (alpine = tiny base image)
+
+Hit it from your laptop: `http://<fedora-ip>:8080`. You see whatever is in `/var/www`.
+
+Stop and clean up:
+
+```bash
+docker stop web
+docker rm web
+```
+
+## Volumes vs bind mounts
+
+Two ways to persist data outside a container:
+
+| Mount type | How you specify it | Where data lives |
+| --- | --- | --- |
+| **Bind mount** | `-v /host/path:/container/path` | A path you choose on the host |
+| **Named volume** | `-v myvolume:/container/path` | Docker-managed dir (`/var/lib/docker/volumes/...`) |
+
+Bind mounts are great for "I want to edit config files on the host." Named volumes are great for database data — Docker manages permissions, and they're easy to back up by name.
+
+```bash
+docker volume create pgdata
+docker run -d --name pg \
+  -e POSTGRES_PASSWORD=secret \
+  -v pgdata:/var/lib/postgresql/data \
+  -p 127.0.0.1:5432:5432 \
+  postgres:16
+```
+
+Postgres data survives `docker rm pg`. To start fresh, also `docker volume rm pgdata`.
+
+## Networking
+
+Each container gets its own network namespace. By default, Docker creates a bridge network so containers can talk to each other by name *if they're on the same user-defined network*.
+
+```bash
+docker network create app-net
+
+docker run -d --name db --network app-net \
+  -e POSTGRES_PASSWORD=secret \
+  postgres:16
+
+docker run -d --name app --network app-net \
+  -e DATABASE_URL=postgres://postgres:secret@db:5432/postgres \
+  my-app-image
+```
+
+Inside the `app` container, `db` resolves to the `db` container's IP. No port mapping needed for container-to-container talk.
+
+> **Bind to `127.0.0.1` in `-p`** — `-p 5432:5432` exposes port 5432 on every host interface (including the public one if there is one). `-p 127.0.0.1:5432:5432` binds only to localhost. For databases, **always** use the second form unless you really need remote access.
+
+## Images and tags
+
+```text
+nginx                  → nginx:latest      (avoid in prod)
+nginx:1.27             → specific version
+nginx:1.27-alpine      → alpine variant (smaller, busybox-based)
+ghcr.io/owner/img:tag  → image from GitHub Container Registry
+```
+
+`:latest` is fine for hobby projects but unstable for production. Pin a specific version, and update intentionally.
+
+## Building your own image
+
+Create a `Dockerfile` next to your app:
+
+```dockerfile filename="Dockerfile"
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+Build and run:
+
+```bash
+docker build -t hello-app .
+docker run -d --name hello-app -p 127.0.0.1:3000:3000 hello-app
+docker logs -f hello-app
+```
+
+You now have a containerized version of the app from [Deploying a Node.js App](/hosting/deploying-a-node-app). Same outside (still a process listening on `:3000`), but Node, npm, and all dependencies are inside the image — your host stays clean.
+
+## Cleaning up
+
+Docker images and stopped containers accumulate. Periodically:
+
+```bash
+docker system prune          # remove stopped containers, dangling images, unused networks
+docker system prune -a       # also remove all unused images (more aggressive)
+docker system df             # how much disk is Docker using?
+```
+
+## Where this goes next
+
+A single `docker run` is fine for one container. Real apps usually need a stack: app + db + cache + proxy. That's [Docker Compose](/advanced/docker-compose), in the Advanced section.
+
+## Podman note
+
+Almost everything above works with `podman` instead of `docker`. Even nicer: podman runs rootless by default, and `podman generate systemd` lets you turn any container into a systemd unit. If you'd rather not give yourself the docker group, swap in podman and read its docs — the concepts are identical.
+
+[Continue to *Operations* →](/operations)

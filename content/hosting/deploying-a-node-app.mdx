@@ -1,0 +1,229 @@
+---
+title: Deploying a Node.js App
+description: A real app, behind systemd, behind a reverse proxy, behind TLS.
+---
+
+# Deploying a Node.js App
+
+End-to-end: take a small Node.js app, run it on your server as a managed service, put a reverse proxy in front of it, and serve it over HTTPS. Same recipe works for Python, Go, Ruby — only the install command changes.
+
+## The app
+
+You can use anything. For this lesson, here's a 20-line Express app you can paste.
+
+On your Fedora box:
+
+```bash
+# Install Node via dnf or nvm. dnf is fine for learning:
+sudo dnf install -y nodejs npm
+
+# Create a dedicated directory under your home:
+mkdir -p ~/apps/hello-app && cd ~/apps/hello-app
+npm init -y
+npm install express
+
+cat > server.js <<'EOF'
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send(`<h1>hello from ${require('os').hostname()}</h1>
+            <p>uptime: ${process.uptime().toFixed(0)}s</p>`);
+});
+
+app.listen(port, '127.0.0.1', () => {
+  console.log(`listening on http://127.0.0.1:${port}`);
+});
+EOF
+
+node server.js
+# Listening on http://127.0.0.1:3000
+```
+
+In another SSH session:
+
+```bash
+curl http://127.0.0.1:3000
+# <h1>hello from fedora</h1> ...
+```
+
+Kill it with Ctrl-C. Time to make it production-shaped.
+
+> **Why bind to `127.0.0.1`, not `0.0.0.0`?** Because we want only the reverse proxy on this same box to reach it. Nothing on the LAN should be able to hit `:3000` directly. This is the principle of **least exposure** — the firewall is a backstop, but binding to localhost is a *guarantee*.
+
+## Step 1 — A dedicated user (optional but good)
+
+Running apps as your normal user is fine for a hobby box, but the cleaner pattern is a non-login service user:
+
+```bash
+sudo useradd --system --home /opt/hello-app --shell /sbin/nologin helloapp
+sudo mkdir -p /opt/hello-app
+sudo cp -r ~/apps/hello-app/* /opt/hello-app/
+sudo chown -R helloapp:helloapp /opt/hello-app
+```
+
+If a future Node CVE hits, the attacker is stuck as `helloapp` — no shell, no sudo, no home directory worth raiding.
+
+## Step 2 — A systemd service
+
+Create the unit file:
+
+```bash
+sudo nano /etc/systemd/system/hello-app.service
+```
+
+```ini filename="/etc/systemd/system/hello-app.service"
+[Unit]
+Description=Hello App (Node.js demo)
+After=network.target
+
+[Service]
+Type=simple
+User=helloapp
+WorkingDirectory=/opt/hello-app
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/node /opt/hello-app/server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Some hardening niceties:
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Reload systemd, then start + enable:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now hello-app
+sudo systemctl status hello-app
+```
+
+Expected output: `Active: active (running)`.
+
+Hit it locally:
+
+```bash
+curl http://127.0.0.1:3000
+```
+
+See logs:
+
+```bash
+journalctl -u hello-app -f
+```
+
+If the app crashes, systemd restarts it after 5 seconds (`Restart=on-failure`, `RestartSec=5`).
+
+## Step 3 — Reverse proxy
+
+Pick one.
+
+### Option A — Caddy
+
+```caddyfile filename="/etc/caddy/Caddyfile"
+hello.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+```bash
+sudo systemctl reload caddy
+```
+
+Visit `https://hello.example.com`. HTTPS is already done. ✅
+
+### Option B — Nginx + certbot
+
+```nginx filename="/etc/nginx/conf.d/hello.conf"
+server {
+    listen 80;
+    server_name hello.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot --nginx -d hello.example.com
+```
+
+certbot rewrites the file to also listen on 443 with TLS, and redirects HTTP to HTTPS. Visit `https://hello.example.com`.
+
+## Step 4 — Deploying updates
+
+To ship a new version:
+
+```bash
+cd ~/apps/hello-app
+# edit code
+sudo cp -r ./* /opt/hello-app/
+sudo chown -R helloapp:helloapp /opt/hello-app
+sudo systemctl restart hello-app
+journalctl -u hello-app -f
+```
+
+This is the manual flow. In [CI/CD to a Server](/advanced/cicd) we'll automate it so `git push` does this.
+
+## Step 5 — Environment variables & secrets
+
+You don't want secrets in `server.js`. Two clean options:
+
+### EnvironmentFile
+
+```bash
+sudo mkdir -p /etc/hello-app
+echo "API_KEY=abcdef" | sudo tee /etc/hello-app/env
+sudo chmod 600 /etc/hello-app/env
+sudo chown helloapp:helloapp /etc/hello-app/env
+```
+
+Add to your service file:
+
+```ini
+[Service]
+EnvironmentFile=/etc/hello-app/env
+```
+
+Reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart hello-app
+```
+
+`process.env.API_KEY` now works inside the app.
+
+### .env file (next.js / dotenv style)
+
+If your framework loads `.env` itself, you can put a `.env` in the working directory and chmod 600 it. systemd doesn't need to know.
+
+## Recap
+
+You now have:
+
+- A Node app running under a dedicated user.
+- systemd supervising it: auto-restart on crash, auto-start on boot.
+- A reverse proxy serving HTTPS in front of it.
+- A workflow for updating it.
+
+Same recipe for everything else you'll deploy. Just swap `node server.js` for `gunicorn`, `uvicorn`, `bundle exec`, `go run`, whatever your stack uses.
+
+[Continue to *PostgreSQL on a Server* →](/hosting/postgres)

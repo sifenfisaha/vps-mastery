@@ -1,0 +1,199 @@
+---
+title: Backups
+description: The single most important thing on this site.
+---
+
+# Backups
+
+If you take **one** thing from this entire course, take this lesson seriously.
+
+A server without backups is a server that **will** lose data. Not "might." Will. Disks fail, filesystems corrupt, you `rm -rf` the wrong directory, ransomware happens. Backups are the only thing that turns those events from "catastrophe" into "annoying afternoon."
+
+## The 3-2-1 rule
+
+A backup is only a backup if all three are true:
+
+- **3 copies** of the data,
+- on **2 different media** (e.g., local disk + remote bucket),
+- with **1 copy off-site** (different physical location).
+
+A copy on the same disk isn't a backup — it dies with the disk.
+A copy in the same building isn't a backup — it dies with the fire/burglary/flood.
+
+## What to back up
+
+Three categories, in priority order:
+
+1. **Databases.** Postgres, MySQL, Redis snapshots. These are the irreplaceable part.
+2. **User-uploaded files.** Anything users put in via your app — uploads, attachments, profile pictures.
+3. **App config.** The `/etc/nginx/`, `/etc/caddy/`, `/etc/systemd/system/`, `/opt/myapp/.env`.
+
+Generally **not** worth backing up:
+
+- The OS itself (you can reinstall Fedora in 10 min)
+- Installed packages (`dnf install` reproduces them)
+- Logs (nice to have, but not catastrophic to lose)
+
+Everything you do back up should be **scriptable to restore**. If restoring requires you to remember 12 steps, you'll mess it up at 2am.
+
+## Tool of choice for files: `restic`
+
+`restic` is a modern backup tool: encrypted, deduplicated, incremental, supports cloud storage natively. One binary, no daemon.
+
+```bash
+sudo dnf install -y restic
+restic version
+```
+
+### Initialize a repo
+
+A "repo" is where backups live — local dir, S3 bucket, Backblaze B2, SFTP server, etc.
+
+Local example:
+
+```bash
+export RESTIC_REPOSITORY="/mnt/backups/restic-repo"
+export RESTIC_PASSWORD="a-strong-passphrase-you-will-remember"
+restic init
+```
+
+S3 example:
+
+```bash
+export RESTIC_REPOSITORY="s3:s3.amazonaws.com/my-restic-bucket"
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export RESTIC_PASSWORD="..."
+restic init
+```
+
+Backblaze B2 is cheaper than S3 and works the same way (`b2:bucket-name`). For a learning setup, B2 free tier or a cheap VPS-attached volume is fine.
+
+### Run a backup
+
+```bash
+restic backup /opt /etc /home /var/lib/pgsql
+# scan finished in 0:01s
+# files: 12,344 new, 0 changed, 0 unmodified
+# Added to the repository: 142.345 MiB (62.5%)
+# snapshot 6a3d8a1c saved
+```
+
+Run it again 5 minutes later — only changes are written.
+
+### List & restore
+
+```bash
+restic snapshots
+restic restore latest --target /tmp/restore-test --include /etc/nginx
+```
+
+The `--target` is where files land; the `--include` filters. Always restore to a *test* location first, never on top of live data.
+
+## Tool of choice for Postgres: `pg_dump`
+
+```bash
+sudo -u postgres pg_dump -Fc hello_db > /var/backups/hello_db-$(date +%F).dump
+```
+
+Then back up that file with restic to off-box storage:
+
+```bash
+restic backup /var/backups
+```
+
+Two-step: dump, then ship. Don't try to use restic to back up Postgres' raw data files while it's running — you'll get inconsistent snapshots.
+
+## Schedule it (the whole point)
+
+A manual backup that you forget to run is the same as no backup. Use a systemd timer ([Cron & systemd Timers](/operations/cron-and-timers)).
+
+```ini filename="/etc/systemd/system/restic-backup.service"
+[Unit]
+Description=Daily restic backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/restic/env
+ExecStart=/usr/bin/restic backup /opt /etc /home /var/backups --exclude-caches
+ExecStartPost=/usr/bin/restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
+```
+
+```ini filename="/etc/systemd/system/restic-backup.timer"
+[Unit]
+Description=Daily restic backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+# Put your repo + password in a root-readable env file:
+sudo mkdir -p /etc/restic
+sudo tee /etc/restic/env > /dev/null <<EOF
+RESTIC_REPOSITORY=b2:my-bucket
+RESTIC_PASSWORD=your-passphrase
+B2_ACCOUNT_ID=...
+B2_ACCOUNT_KEY=...
+EOF
+sudo chmod 600 /etc/restic/env
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now restic-backup.timer
+```
+
+Verify the timer:
+
+```bash
+systemctl list-timers | grep restic
+```
+
+`forget --keep-daily/weekly/monthly` is the retention policy. The example above keeps 7 daily, 4 weekly, 6 monthly snapshots — about 4 months of history without unbounded growth.
+
+## The most important step: test the restore
+
+Two minutes spent now buys you sleep at 3am later.
+
+```bash
+# Pretend prod was lost. Restore to a temp dir:
+sudo restic restore latest --target /tmp/dr-test --include /etc/nginx
+
+# Look at what came back:
+ls /tmp/dr-test/etc/nginx/conf.d/
+
+# Try restoring a postgres dump end-to-end:
+sudo -u postgres createdb dr_test
+sudo -u postgres pg_restore -d dr_test /tmp/dr-test/var/backups/hello_db-latest.dump
+sudo -u postgres psql -d dr_test -c "\dt"
+sudo -u postgres dropdb dr_test
+```
+
+Do this once a month. Untested backups are a folk tale you tell yourself.
+
+## A starter "disaster runbook"
+
+Write this down, save it somewhere not on the server:
+
+```text
+DISASTER RECOVERY — fedora-lab
+
+1. Provision a new Linux box (any distro w/ restic available).
+2. Set env: RESTIC_REPOSITORY, RESTIC_PASSWORD, cloud creds.
+3. restic restore latest --target /restore
+4. dnf install -y nginx postgresql-server [...packages from /restore/etc/dnf-installed.txt]
+5. Copy back: /etc/nginx, /etc/systemd/system, /opt/myapp, /var/backups
+6. createdb hello_db; pg_restore -d hello_db /var/backups/hello_db-latest.dump
+7. systemctl daemon-reload; systemctl enable --now nginx postgresql hello-app
+8. Point DNS to new IP.
+9. curl /health on each service.
+```
+
+When the day comes you actually need this, you'll be very grateful past-you wrote it.
+
+[Continue to *Cron & systemd Timers* →](/operations/cron-and-timers)

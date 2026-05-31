@@ -1,0 +1,174 @@
+---
+title: Your First SSH Connection
+description: Log into your Fedora box from this laptop. The moment 'VPS' becomes real.
+---
+
+# Your First SSH Connection
+
+This is the lesson where "VPS" stops being theory. By the end of it you'll be typing on your laptop and seeing commands execute on the Fedora box across the room.
+
+## What you'll do
+
+1. Make sure the SSH server is running on the Fedora PC.
+2. Find the Fedora PC's IP address on your LAN.
+3. SSH into it from this laptop.
+4. Set up **key-based login** so you don't type a password every time.
+
+## Step 1 — On the Fedora PC: enable SSH
+
+Sit down at the Fedora machine (physically — keyboard + screen). Open a terminal.
+
+```bash
+# Is sshd installed and running?
+sudo systemctl status sshd
+```
+
+You'll see one of three things:
+
+- **`active (running)`** → great, skip to Step 2.
+- **`inactive (dead)`** → run `sudo systemctl enable --now sshd`.
+- **`Unit sshd.service could not be found`** → install it first:
+
+```bash
+sudo dnf install -y openssh-server
+sudo systemctl enable --now sshd
+```
+
+`enable --now` does two things at once: marks the service to start automatically on every boot, **and** starts it right now.
+
+Verify it's listening on port 22:
+
+```bash
+ss -tlnp | grep ssh
+# LISTEN 0  128  0.0.0.0:22  ...
+```
+
+> **What `enable` vs `start` means** — `start` runs it once; if you reboot, it's gone. `enable` makes it auto-start on every boot. You almost always want both, hence the `--now` shortcut.
+
+## Step 2 — On the Fedora PC: find its IP and username
+
+```bash
+# Your username on the Fedora box
+whoami
+
+# The Fedora box's LAN IP address
+ip -4 addr show | grep inet
+```
+
+Look for something like `192.168.1.42` or `10.0.0.15` — that's your Fedora box's address on your home network. Write it down.
+
+Also make sure the firewall allows SSH (it usually does by default on Fedora):
+
+```bash
+sudo firewall-cmd --list-services
+# Should include: ssh
+
+# If it doesn't:
+sudo firewall-cmd --permanent --add-service=ssh
+sudo firewall-cmd --reload
+```
+
+## Step 3 — From this laptop: connect
+
+Walk back to your laptop. Open a terminal and run:
+
+```bash
+ssh your-fedora-username@192.168.1.42
+```
+
+Replace the username and IP with what you wrote down.
+
+The first time, you'll see:
+
+```text
+The authenticity of host '192.168.1.42 (192.168.1.42)' can't be established.
+ED25519 key fingerprint is SHA256:....
+Are you sure you want to continue connecting (yes/no/[fingerprint])?
+```
+
+Type `yes`. This is your laptop saying: "I've never met this server before — should I trust it?" Once you say yes, the server's identity is saved in `~/.ssh/known_hosts` on your laptop, and future logins won't ask again.
+
+Type your Fedora user's password. **You're in.**
+
+The prompt will change to something like `your-fedora-username@fedora:~$` — anything you type now runs on the Fedora box, not your laptop.
+
+Try it:
+
+```bash
+hostname     # the server's name
+whoami       # your user on the server
+date         # the server's clock
+exit         # close the session and return to your laptop
+```
+
+That's the entire game. Everything else in this course is just *more interesting commands* on the other end of that connection.
+
+## Step 4 — Stop typing your password
+
+Typing a password every login gets old fast, and password-only SSH is the #1 thing hackers brute-force. Let's set up **SSH keys** — a cryptographic key pair that replaces the password.
+
+### 4a. On your laptop, generate a key (if you don't already have one)
+
+```bash
+# Check if you already have a key:
+ls -la ~/.ssh/id_ed25519.pub
+```
+
+If that file exists, skip to 4b. Otherwise, generate one:
+
+```bash
+ssh-keygen -t ed25519 -C "your-email@example.com"
+```
+
+- Press Enter to accept the default file path.
+- For the passphrase: you can leave it empty for now, or set one (more secure, but you'll type it on every login unless you use an SSH agent — we'll cover that later).
+
+This creates two files:
+
+- `~/.ssh/id_ed25519` — your **private** key. **NEVER share it.** Anyone with this file can log in as you.
+- `~/.ssh/id_ed25519.pub` — your **public** key. Safe to share. We put it on the server.
+
+### 4b. Copy your public key to the Fedora box
+
+```bash
+ssh-copy-id your-fedora-username@192.168.1.42
+```
+
+Type your password one last time. This appends your public key to `~/.ssh/authorized_keys` on the server.
+
+### 4c. Test it
+
+```bash
+ssh your-fedora-username@192.168.1.42
+```
+
+If you didn't set a passphrase, you should land directly in the shell with no password prompt. If you did, you'll be asked for the passphrase to **unlock your local key** — different from typing your server password.
+
+## Make your life easier with `~/.ssh/config`
+
+Typing `ssh your-fedora-username@192.168.1.42` is annoying. On your laptop, create or edit `~/.ssh/config`:
+
+```ssh-config
+Host fedora
+    HostName 192.168.1.42
+    User your-fedora-username
+```
+
+Now you can just type:
+
+```bash
+ssh fedora
+```
+
+Use this trick for every server you connect to.
+
+## What you just learned
+
+- SSH is a service on port 22 that accepts logins.
+- Your client (laptop) and host (Fedora) authenticate to each other.
+- Key-based auth is more secure and more convenient than passwords.
+- Almost all of server administration happens through this one connection.
+
+From here on, every lesson assumes you can SSH into your box. Welcome to server admin.
+
+[Continue to *Linux Basics* →](/linux-basics)

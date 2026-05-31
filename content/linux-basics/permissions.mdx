@@ -1,0 +1,174 @@
+---
+title: Permissions & Ownership
+description: Read the cryptic letters in `ls -l`, understand chmod and chown, and stop seeing "Permission denied."
+---
+
+# Permissions & Ownership
+
+Run this on your Fedora box:
+
+```bash
+ls -la /etc/ssh/
+```
+
+You'll see lines like:
+
+```text
+-rw-------. 1 root root  2640 Jan 12 10:14 ssh_host_ed25519_key
+-rw-r--r--. 1 root root   601 Jan 12 10:14 ssh_host_ed25519_key.pub
+drwxr-xr-x. 2 root root  4096 Mar  1 09:00 sshd_config.d
+```
+
+Once you can read that, half of server administration makes sense.
+
+## Decoding the first column
+
+It looks scary. It's not. Read it left to right:
+
+```text
+- rwx rwx rwx
+│ │   │   │
+│ │   │   └── others (everyone else)
+│ │   └────── group
+│ └────────── owner
+└──────────── file type
+```
+
+### File type
+
+| Char | Meaning |
+| --- | --- |
+| `-` | regular file |
+| `d` | directory |
+| `l` | symbolic link |
+
+### The three rwx triplets
+
+Each triplet is **read / write / execute** for one set of users:
+
+- **Owner** — the user who owns the file
+- **Group** — the group that owns the file
+- **Others** — literally anyone else
+
+A dash (`-`) where a letter would be means *that permission is denied*.
+
+So `-rw-r--r--` reads as:
+
+- It's a file.
+- Owner can read and write.
+- Group can read.
+- Others can read.
+
+And `drwxr-xr-x` reads as:
+
+- It's a directory.
+- Owner can read, write, and "execute" (enter) it.
+- Group can read and enter.
+- Others can read and enter.
+
+> **What "execute" means on a directory** — surprisingly, it means "you're allowed to enter (`cd`) into it." A directory you can `r`ead but not `x`-execute lists its filenames but won't let you open anything inside. This trips up everyone once.
+
+## The second and third columns: ownership
+
+```text
+-rw-r--r--. 1 root root  601 ... ssh_host_ed25519_key.pub
+              ^    ^
+              │    └── group that owns it
+              └── user that owns it
+```
+
+The owner is the one who can change the file's permissions. Root can change anyone's.
+
+## Changing permissions: `chmod`
+
+There are two syntaxes. Learn both — you'll see both in tutorials.
+
+### Symbolic mode (easier to read)
+
+```bash
+chmod u+x script.sh     # add execute for User (owner)
+chmod g-w file.txt      # remove write for Group
+chmod o-r secret.txt    # remove read for Others
+chmod a+r public.txt    # add read for All (u+g+o)
+```
+
+### Numeric mode (faster to write)
+
+Each permission has a number:
+
+- read = `4`
+- write = `2`
+- execute = `1`
+
+You add them up per triplet:
+
+| Number | Means | Letters |
+| --- | --- | --- |
+| `7` | read + write + execute | `rwx` |
+| `6` | read + write | `rw-` |
+| `5` | read + execute | `r-x` |
+| `4` | read only | `r--` |
+| `0` | nothing | `---` |
+
+So `chmod 644 file.txt` means: owner gets `6` (rw), group gets `4` (r), others get `4` (r) → `-rw-r--r--`.
+
+Common patterns to memorize:
+
+```bash
+chmod 644 some-config.conf    # owner rw, others r — files
+chmod 755 some-script.sh      # owner rwx, others rx — executables, directories
+chmod 600 ~/.ssh/id_ed25519   # owner rw only — SSH private keys
+chmod 700 ~/.ssh              # owner rwx only — SSH directory
+```
+
+## Changing ownership: `chown`
+
+```bash
+sudo chown alfie file.txt              # change owner only
+sudo chown alfie:alfie file.txt        # change owner and group
+sudo chown -R alfie:alfie /var/www/    # recursive (whole tree)
+```
+
+> **Why `sudo`?** You usually need to be root to change ownership — otherwise you could give your files to another user without consent, or grab someone else's. `chmod` works without sudo if you're the file's owner.
+
+## "Permission denied"
+
+This message means exactly one of three things:
+
+1. The current user lacks the relevant `r`, `w`, or `x` bit on the file.
+2. The current user lacks `x` on a parent directory along the path.
+3. You're trying a privileged operation (modifying `/etc/`, binding port 80) without sudo.
+
+Debug it methodically:
+
+```bash
+ls -la /path/to/the/file
+whoami
+groups            # which groups am I in?
+```
+
+99% of the time, the answer is staring back at you from `ls -la`.
+
+## Special bits you'll see eventually
+
+You don't need these on day one, but you'll spot them in the wild:
+
+- `s` instead of `x` on the owner triplet → **setuid**. Runs as the file's owner regardless of who launched it. Why `sudo` works (`/usr/bin/sudo` is setuid root).
+- `t` at the end → **sticky bit**. On a directory, means "only the file's owner can delete their own file." `/tmp` has this so users can't delete each other's files.
+
+We won't set these by hand in this course. Just don't be surprised when you see them in `/usr/bin/` or `/tmp/`.
+
+## The one exercise
+
+```bash
+cd /tmp
+echo "secret" > secret.txt
+ls -la secret.txt
+chmod 600 secret.txt
+ls -la secret.txt
+# now try as another user (or just observe): nobody else can read this
+```
+
+Next: `sudo` and what makes root different.
+
+[Continue to *Users, Root & sudo* →](/linux-basics/users-and-sudo)

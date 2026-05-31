@@ -1,0 +1,143 @@
+---
+title: IPs, Ports & DNS
+description: The three concepts the entire internet runs on, in plain English.
+---
+
+# IPs, Ports & DNS
+
+Every networking problem you'll ever debug is one of these three things being wrong. Lock them in now.
+
+## IP addresses — the server's phone number
+
+An IP address identifies a machine on a network. Two flavors:
+
+- **IPv4** — `192.168.1.42`, `203.0.113.7`. Four numbers, each 0–255.
+- **IPv6** — `2001:db8::1`. Longer, designed because the world ran out of IPv4. You'll see them more over time; for now most home networks use IPv4.
+
+There are two subcategories of IPv4 that matter to you:
+
+| Range | Type | Where it comes from |
+| --- | --- | --- |
+| `10.x.x.x`, `172.16.x.x – 172.31.x.x`, `192.168.x.x` | **Private** (LAN-only) | Your home router gives them out |
+| Everything else | **Public** | Your ISP assigns one to your router |
+
+The IP your Fedora box has now (something like `192.168.1.42`) is **private** — it's only reachable inside your home network. The whole internet doesn't see it. We'll talk about reaching it from outside in [Remote Access](/remote-access).
+
+### Find your IPs
+
+```bash
+ip -4 addr show                     # all IPv4 addresses on this box
+ip -4 addr show | grep "inet "      # cleaner
+
+# Your router/gateway:
+ip route | grep default
+
+# Your *public* IP (what the internet sees you as):
+curl ifconfig.me
+```
+
+## Ports — which door at the address
+
+Once a packet reaches your IP, the OS needs to know which **service** should handle it. That's what ports are for. There are 65,535 of them, numbered 1–65535.
+
+A few you should know cold:
+
+| Port | Service |
+| --- | --- |
+| 22 | SSH |
+| 25 | SMTP (email sending) |
+| 53 | DNS |
+| 80 | HTTP |
+| 443 | HTTPS |
+| 3306 | MySQL/MariaDB |
+| 5432 | PostgreSQL |
+| 6379 | Redis |
+| 8080 | Alt HTTP (common dev port) |
+| 27017 | MongoDB |
+
+Ports below 1024 are "privileged" — only root can bind a service to them. That's why Nginx is started as root then drops to the `nginx` user.
+
+### See which ports are listening
+
+```bash
+sudo ss -tlnp                # TCP listeners, with the process name
+sudo ss -ulnp                # UDP listeners
+```
+
+Sample output:
+
+```text
+State    Recv-Q  Send-Q   Local Address:Port    Peer Address:Port   Process
+LISTEN   0       128            0.0.0.0:22             0.0.0.0:*    users:(("sshd",pid=873,fd=3))
+LISTEN   0       128               [::]:22                [::]:*    users:(("sshd",pid=873,fd=4))
+```
+
+`0.0.0.0:22` means "listening on port 22 on every network interface." `127.0.0.1:5432` would mean "listening on port 5432 only on localhost — outside the machine can't reach it."
+
+## DNS — the phonebook
+
+Humans type `example.com`. Computers need `93.184.216.34`. DNS is the lookup system in between.
+
+```bash
+dig example.com +short            # ask DNS, just give me the answer
+dig example.com                   # full output
+host example.com                  # shorter command, same idea
+nslookup example.com              # older but ubiquitous
+```
+
+DNS lookups are tried in this order (mostly):
+
+1. `/etc/hosts` on your machine — local override file
+2. The DNS server configured on your system (often your router or your ISP, or `1.1.1.1` / `8.8.8.8`)
+3. That DNS server walks the global hierarchy if it doesn't already know the answer
+
+### `/etc/hosts` — local DNS override
+
+You can hardcode `name → IP` mappings in `/etc/hosts`. Useful for testing:
+
+```text filename="/etc/hosts"
+127.0.0.1   localhost
+192.168.1.42  fedora-lab    # so I can `ssh fedora-lab` from this machine
+```
+
+This only affects your own machine. It's invisible to anyone else.
+
+## Putting them together: anatomy of a request
+
+You type `https://example.com` in your browser. Here's what happens:
+
+1. **DNS lookup** — Your machine asks "what IP is `example.com`?" → `93.184.216.34`
+2. **TCP connection** — Open a connection to `93.184.216.34` on port **443** (HTTPS)
+3. **TLS handshake** — Negotiate encryption
+4. **HTTP request** — Send `GET / HTTP/1.1\r\nHost: example.com\r\n...`
+5. **Response** — Web server sends HTML back
+
+If any of those fail, you get a different error. Knowing this sequence makes diagnosing 90% of "the site won't load" issues a 30-second job.
+
+## Common debugging commands
+
+```bash
+ping 8.8.8.8                    # is the network up at all?
+ping example.com                # is DNS working AND the host reachable?
+dig example.com                 # what IP does DNS resolve it to?
+curl -v https://example.com     # full request/response with TLS details
+traceroute example.com          # which routers does my packet pass through?
+sudo ss -tlnp                   # what's listening on this box?
+sudo ss -tnp state established  # what TCP connections are open right now?
+nc -vz host port                # is port X open on host Y?
+```
+
+The single most useful debug command is `nc -vz`:
+
+```bash
+nc -vz 192.168.1.42 22       # is SSH reachable on the Fedora box?
+# Ncat: Connected to 192.168.1.42:22.
+
+nc -vz 192.168.1.42 443      # is HTTPS reachable?
+# Ncat: Connection refused.
+```
+
+If `nc -vz` succeeds, the network and firewall are fine — your problem is in the application.
+If it fails, the network or firewall is the issue.
+
+[Continue to *Firewall (firewalld)* →](/networking/firewalld)

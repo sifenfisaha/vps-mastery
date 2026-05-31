@@ -1,0 +1,124 @@
+---
+title: Tailscale (recommended)
+description: Reach your server from anywhere as if it were on your LAN. Zero port forwarding.
+---
+
+# Tailscale
+
+Tailscale is a **mesh VPN** built on WireGuard. After 5 minutes of setup, all your devices are on one encrypted private network that follows you around — phone, laptop, server, anything.
+
+For "I want to SSH into my home server from a coffee shop" this is the right answer. No ports opened on your router, no public IP needed, no DNS configuration.
+
+## What you'll have when done
+
+- Your Fedora box gets a stable `100.x.y.z` IP that only your devices can reach.
+- A friendly hostname like `fedora.tailnet-name.ts.net` you can SSH to from anywhere.
+- Encrypted, peer-to-peer connections (Tailscale's servers are only used for coordination; your data doesn't go through them).
+- Works on cellular, behind NAT, in airports — anywhere with internet.
+
+## Install on your Fedora box
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo systemctl enable --now tailscaled
+sudo tailscale up
+```
+
+The last command prints a URL. Open it in any browser, sign in (Google/Microsoft/GitHub/email), and you're done. Tailscale assigns this device an IP from the `100.64.0.0/10` range.
+
+```bash
+tailscale ip -4              # show this box's tailscale IPv4
+tailscale status             # all your devices
+```
+
+## Install on your laptop
+
+The same install script works on Linux. For macOS / Windows / iOS / Android, grab the app from [tailscale.com/download](https://tailscale.com/download). Sign in with the same account. Your laptop now sees the Fedora box.
+
+```bash
+ssh alfie@100.x.y.z          # using the tailscale IP
+# or, even nicer, use the MagicDNS name:
+ssh alfie@fedora              # if you named the box "fedora"
+```
+
+> **MagicDNS** — turn it on in the Tailscale admin console (DNS tab → "Enable MagicDNS"). Then every device gets a name like `fedora.your-tailnet.ts.net`. You can usually drop the suffix and just use `fedora`.
+
+## Update your `~/.ssh/config`
+
+```ssh-config
+Host fedora
+    HostName fedora                # tailscale magicdns name
+    User alfie
+    Port 2222                      # if you moved it in SSH hardening
+```
+
+That's it — `ssh fedora` now works from anywhere on the planet.
+
+## Stop SSH from listening on your home LAN (optional but cool)
+
+Once Tailscale works, you can technically restrict SSH to **only** be reachable over the Tailscale interface. The Tailscale daemon creates an interface called `tailscale0`. You can tell firewalld to allow SSH only there.
+
+```bash
+# Identify interfaces:
+ip link show
+
+# Move tailscale0 into the trusted zone:
+sudo firewall-cmd --permanent --zone=trusted --change-interface=tailscale0
+
+# Remove SSH from the public zone (now nothing on the LAN can SSH in):
+sudo firewall-cmd --permanent --remove-service=ssh --zone=public
+sudo firewall-cmd --reload
+```
+
+Now SSH is **invisible** to anyone not on your Tailscale network — even your own LAN. To anyone scanning your home IP from the internet, port 22 doesn't exist. This is enormous.
+
+> **Don't do this without testing.** Before removing SSH from `public`, confirm SSH-over-Tailscale works in a fresh terminal. If anything goes wrong you can revert by re-adding the service.
+
+## Tailscale SSH (the killer feature)
+
+Tailscale has its own SSH replacement that uses Tailscale identities instead of SSH keys. Turn it on with:
+
+```bash
+sudo tailscale up --ssh
+```
+
+Now you can `tailscale ssh alfie@fedora` and authentication is handled by your Tailscale login (Google/etc). You can revoke any device from the admin console and it instantly loses access. No key management.
+
+This is incredible for a team — give a teammate `acl` access to your dev box for an afternoon, then revoke when they're done.
+
+## Subnet routing & exit nodes (advanced)
+
+Two extra superpowers:
+
+- **Subnet router** — make Tailscale route traffic for a whole LAN through this Fedora box. Lets you reach your printer, smart bulbs, etc. without putting them on Tailscale.
+- **Exit node** — route *all* your laptop's internet traffic through your home connection (e.g., to access region-locked stuff from a hotel).
+
+Subnet router:
+
+```bash
+# Allow IP forwarding on the Fedora box:
+echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-tailscale.conf
+echo 'net.ipv6.conf.all.forwarding = 1' | sudo tee -a /etc/sysctl.d/99-tailscale.conf
+sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+
+# Re-up tailscale advertising your LAN:
+sudo tailscale up --advertise-routes=192.168.1.0/24
+```
+
+Then approve the routes in the Tailscale admin console (Machines → your device → "Edit route settings").
+
+Exit node:
+
+```bash
+sudo tailscale up --advertise-exit-node
+```
+
+Approve in admin console. On any other device: turn on "Use as exit node" in the Tailscale app.
+
+## When Tailscale is the wrong answer
+
+Tailscale gives **private** access — only your devices. If you're hosting a **public website** for the world, Tailscale alone won't help. For that, use [Cloudflare Tunnel](/remote-access/cloudflare-tunnel) (exposes one site) or [Port Forwarding](/remote-access/port-forwarding) (full public exposure).
+
+For everything else — admin work, personal services, dev environments — Tailscale is the right default.
+
+[Continue to *Cloudflare Tunnel* →](/remote-access/cloudflare-tunnel)

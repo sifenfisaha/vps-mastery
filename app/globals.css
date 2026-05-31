@@ -1,0 +1,348 @@
+/* Vercel-leaning polish on top of Nextra defaults */
+
+:root {
+  --vps-bg-dark: rgb(10, 10, 10);
+  --vps-bg-light: rgb(250, 250, 250);
+}
+
+html {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+html.dark body {
+  background: var(--vps-bg-dark);
+}
+
+/* Tighter, Vercel-style headings */
+.nextra-content h1 {
+  letter-spacing: -0.025em;
+}
+.nextra-content h2,
+.nextra-content h3 {
+  letter-spacing: -0.015em;
+}
+
+/* Slightly rounded code blocks, subtle borders */
+.nextra-content pre {
+  border-radius: 10px;
+}
+
+/* Hero card grid used on the landing page */
+.vps-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.vps-card {
+  display: block;
+  padding: 20px 22px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  text-decoration: none !important;
+  color: inherit;
+}
+
+html:not(.dark) .vps-card {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.vps-card:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  transform: translateY(-1px);
+}
+
+html:not(.dark) .vps-card:hover {
+  border-color: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.vps-card h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.vps-card p {
+  margin: 0;
+  font-size: 0.875rem;
+  opacity: 0.7;
+  line-height: 1.5;
+}
+
+.vps-hero-eyebrow {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  opacity: 0.8;
+}
+
+html:not(.dark) .vps-hero-eyebrow {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+/* ============================================================
+   shadcn-style Command palette (cmdk)
+   ============================================================ */
+
+:root {
+  --shadcn-bg: #ffffff;
+  --shadcn-fg: #0a0a0a;
+  --shadcn-muted: #6b7280;
+  --shadcn-border: rgba(0, 0, 0, 0.08);
+  --shadcn-border-strong: rgba(0, 0, 0, 0.12);
+  --shadcn-hover: rgba(0, 0, 0, 0.04);
+  --shadcn-selected: rgba(0, 0, 0, 0.06);
+  --shadcn-kbd-bg: rgba(0, 0, 0, 0.04);
+  --shadcn-kbd-fg: #525252;
+  --shadcn-overlay: rgba(0, 0, 0, 0.5);
+}
+
+html.dark {
+  --shadcn-bg: #0a0a0a;
+  --shadcn-fg: #fafafa;
+  --shadcn-muted: #a1a1aa;
+  --shadcn-border: rgba(255, 255, 255, 0.08);
+  --shadcn-border-strong: rgba(255, 255, 255, 0.14);
+  --shadcn-hover: rgba(255, 255, 255, 0.04);
+  --shadcn-selected: rgba(255, 255, 255, 0.08);
+  --shadcn-kbd-bg: rgba(255, 255, 255, 0.06);
+  --shadcn-kbd-fg: #d4d4d8;
+  --shadcn-overlay: rgba(0, 0, 0, 0.7);
+}
+
+/* Trigger button in the navbar ----------------------------- */
+.shadcn-search-trigger {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px 0 10px;
+  min-width: 220px;
+  border-radius: 8px;
+  border: 1px solid var(--shadcn-border);
+  background: var(--shadcn-bg);
+  color: var(--shadcn-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.shadcn-search-trigger:hover {
+  border-color: var(--shadcn-border-strong);
+  background: var(--shadcn-hover);
+}
+
+.shadcn-search-trigger__text {
+  flex: 1;
+  text-align: left;
+}
+
+/* Generic keyboard chip ------------------------------------ */
+.shadcn-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 20px;
+  min-width: 20px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid var(--shadcn-border);
+  background: var(--shadcn-kbd-bg);
+  color: var(--shadcn-kbd-fg);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.shadcn-kbd--esc {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.shadcn-kbd--enter {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+/* Dialog overlay -------------------------------------------- */
+.shadcn-search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--shadcn-overlay);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: clamp(48px, 12vh, 140px);
+  animation: shadcn-fade-in 0.12s ease-out;
+}
+
+@keyframes shadcn-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.shadcn-search-dialog {
+  width: min(640px, calc(100vw - 32px));
+  border-radius: 12px;
+  background: var(--shadcn-bg);
+  border: 1px solid var(--shadcn-border-strong);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.04),
+    0 4px 20px rgba(0, 0, 0, 0.10),
+    0 24px 60px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  animation: shadcn-pop-in 0.14s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
+@keyframes shadcn-pop-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Command core ---------------------------------------------- */
+.shadcn-command {
+  display: flex;
+  flex-direction: column;
+  color: var(--shadcn-fg);
+}
+
+.shadcn-command-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--shadcn-border);
+  color: var(--shadcn-muted);
+}
+
+.shadcn-command-input {
+  all: unset;
+  flex: 1;
+  font-size: 14px;
+  color: var(--shadcn-fg);
+  line-height: 1.4;
+}
+
+.shadcn-command-input::placeholder {
+  color: var(--shadcn-muted);
+}
+
+.shadcn-command-list {
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  scrollbar-width: thin;
+}
+
+.shadcn-command-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--shadcn-muted);
+}
+
+.shadcn-command-group {
+  padding: 4px 0;
+}
+
+.shadcn-command-group [cmdk-group-heading] {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--shadcn-muted);
+}
+
+.shadcn-command-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--shadcn-fg);
+}
+
+.shadcn-command-item[data-selected='true'] {
+  background: var(--shadcn-selected);
+}
+
+.shadcn-command-item[data-selected='true'] .shadcn-kbd--enter {
+  opacity: 1;
+}
+
+.shadcn-command-item__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.shadcn-command-item__title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shadcn-command-item__desc {
+  font-size: 12px;
+  color: var(--shadcn-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.shadcn-command-footer {
+  display: flex;
+  gap: 16px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--shadcn-border);
+  background: var(--shadcn-hover);
+  font-size: 11px;
+  color: var(--shadcn-muted);
+}
+
+.shadcn-command-footer__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Make sure Nextra's default search slot styles don't shrink ours */
+.shadcn-search-trigger { box-sizing: border-box; }
+
+@media (max-width: 640px) {
+  .shadcn-search-trigger {
+    min-width: 0;
+    width: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+  .shadcn-search-trigger__text,
+  .shadcn-search-trigger .shadcn-kbd {
+    display: none;
+  }
+}
